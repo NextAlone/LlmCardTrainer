@@ -61,6 +61,7 @@ import xyz.nextalone.cardtrainer.engine.holdem.Action
 import xyz.nextalone.cardtrainer.engine.holdem.ActionPresets
 import xyz.nextalone.cardtrainer.engine.holdem.Card as PokerCard
 import xyz.nextalone.cardtrainer.engine.holdem.Equity
+import xyz.nextalone.cardtrainer.engine.holdem.HandEvaluator
 import xyz.nextalone.cardtrainer.engine.holdem.HoldemTable
 import xyz.nextalone.cardtrainer.engine.holdem.HoldemTrainer
 import xyz.nextalone.cardtrainer.engine.holdem.Outs
@@ -252,14 +253,19 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         bottomBar = {
             // Pinned navigation: 发下一街 + 新牌局 only appear after the user has
             // submitted their decision; before that, DecidingBlock shows its own
-            // 提交 / 新牌局 buttons.
+            // 提交 / 新牌局 buttons. At RIVER (all 5 board cards dealt) we hide
+            // 发下一街 — real Hold'em has no betting round after the river
+            // decision, showdown is just comparing cards.
             if (phase == Phase.SUBMITTED) {
+                val canAdvance = table.street == Street.PREFLOP ||
+                    table.street == Street.FLOP ||
+                    table.street == Street.TURN
                 Surface(tonalElevation = 3.dp) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(16.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        if (table.street != Street.SHOWDOWN) {
+                        if (canAdvance) {
                             FilledTonalButton(
                                 onClick = {
                                     table = trainer.advanceStreet(table)
@@ -417,6 +423,11 @@ private fun SubmittedBlock(
                 if (table.toCall > 0) {
                     val o = kotlin.math.round(table.potOdds * 1000) / 10
                     add("赔率 $o%")
+                }
+                if (table.board.size >= 3) {
+                    val cat = HandEvaluator.evaluate(table.hero + table.board).category
+                    val prefix = if (table.street == Street.RIVER) "最终牌型" else "当前最佳"
+                    add("$prefix: ${cat.displayName}")
                 }
             }
             if (parts.isNotEmpty()) {
