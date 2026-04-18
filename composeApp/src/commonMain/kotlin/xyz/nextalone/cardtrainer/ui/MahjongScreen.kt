@@ -125,7 +125,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                 val safety = Safety.rank(
                     candidates = candidates.ifEmpty { hand },
                     ownDiscards = trainer.discards.toList(),
-                    opponentDiscards = emptyList(),
+                    opponentDiscards = trainer.opponentDiscards(),
                 )
                 val typeReport = if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, trainer.missing)) {
                     HandType.classify(hand)
@@ -287,7 +287,9 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                     advice = advice,
                     onDiscard = { tile ->
                         trainer.discard(tile)
-                        if (trainer.wallRemaining() > 0) trainer.drawTile()
+                        // 3 bots draw+discard, then hero draws — this is the
+                        // real 4-seat round structure.
+                        trainer.runOpponentsAndDraw()
                         refreshHand()
                         advice = null
                     },
@@ -400,11 +402,94 @@ private fun PlayingContent(
         }
     }
 
+    // Opponent discards (3 bots).
+    OpponentDiscardsPanel(trainer = trainer)
+
+    // Tile pool — every tile with its remaining unseen count.
+    TilePoolPanel(unseen = trainer.unseenByTile())
+
     advice?.let {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
         ) {
             AiMarkdown(it)
+        }
+    }
+}
+
+@Composable
+private fun OpponentDiscardsPanel(trainer: SichuanTrainer) {
+    val labels = listOf("下家", "对家", "上家")
+    val views = trainer.opponentViews()
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("对家弃牌", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            views.forEachIndexed { i, v ->
+                val tag = buildString {
+                    append(labels.getOrNull(i) ?: "P${i + 1}")
+                    v.missing?.let { append(" 缺${it.cn}") }
+                    append("  |  ")
+                    append(
+                        if (v.discards.isEmpty()) "尚未出牌"
+                        else v.discards.joinToString(" ") { it.label },
+                    )
+                }
+                Text(tag, style = MaterialTheme.typography.bodySmall)
+                if (i < views.lastIndex) Spacer(Modifier.height(4.dp))
+            }
+        }
+    }
+}
+
+/**
+ * 27-tile pool viewer: one row per suit, each tile shown with its remaining
+ * unseen count (4 = untouched, 0 = all gone). Matches how players "count
+ * tiles" in a real game — which tiles are still live in the wall / opponents.
+ */
+@Composable
+private fun TilePoolPanel(unseen: Map<Tile, Int>) {
+    Card {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "牌池剩余（每张最多 4）",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(6.dp))
+            Suit.entries.forEach { s ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        s.cn,
+                        modifier = Modifier.width(20.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = when (s) {
+                            Suit.WAN -> Color(0xFFB00020)
+                            Suit.TIAO -> Color(0xFF0E7C3A)
+                            Suit.TONG -> Color(0xFF1E5AA8)
+                        },
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    for (n in 1..9) {
+                        val count = unseen[Tile(s, n)] ?: 0
+                        Text(
+                            "$n:$count",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = when (count) {
+                                0 -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                1 -> MaterialTheme.colorScheme.tertiary
+                                else -> MaterialTheme.colorScheme.onSurface
+                            },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+            }
         }
     }
 }
