@@ -26,12 +26,18 @@ suspend fun testConnection(cfg: ProviderConfig): TestResult {
     }
     val provider = LlmProviders.create(cfg)
     return try {
+        // 256 tokens: enough for reasoning models to burn some budget inside
+        // <think> and still squeeze out a single final character.
         val sample = provider.coach(
-            systemPrompt = "你是一个 API 连通性测试。只用一个汉字回答。",
+            systemPrompt = "你是一个 API 连通性测试。只用一个汉字回答。不要输出推理过程。",
             userPrompt = "ping",
-            maxTokens = 16,
-        ).take(60)
-        TestResult.Ok(sample.ifBlank { "(空响应)" })
+            maxTokens = 256,
+        ).take(120)
+        TestResult.Ok(
+            sample.ifBlank {
+                "(空响应：模型返回空。可能是 max_tokens 被推理过程耗尽，或代理未返回 content/reasoning_content)"
+            },
+        )
     } catch (e: HttpRequestTimeoutException) {
         TestResult.Fail("请求超时", "Base URL 是否可达？${cfg.baseUrl}")
     } catch (e: ClientRequestException) {
