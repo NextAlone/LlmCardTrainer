@@ -2,6 +2,7 @@ package com.nextalone.cardtrainer.coach
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -36,6 +37,12 @@ class OpenAiProvider(
 
     private val client = HttpClient {
         install(ContentNegotiation) { json(json) }
+        install(HttpTimeout) {
+            connectTimeoutMillis = 15_000
+            requestTimeoutMillis = 60_000
+            socketTimeoutMillis = 60_000
+        }
+        expectSuccess = true
     }
 
     override suspend fun coach(systemPrompt: String, userPrompt: String, maxTokens: Int): String {
