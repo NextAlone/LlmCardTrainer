@@ -60,17 +60,27 @@ import xyz.nextalone.cardtrainer.engine.mahjong.Suit
 import xyz.nextalone.cardtrainer.engine.mahjong.Tile
 import xyz.nextalone.cardtrainer.engine.mahjong.UkeIre
 import xyz.nextalone.cardtrainer.storage.AppSettings
+import xyz.nextalone.cardtrainer.storage.MahjongSession
+import xyz.nextalone.cardtrainer.storage.loadMahjongSession
+import xyz.nextalone.cardtrainer.storage.saveMahjongSession
+import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.launch
 
-private enum class MjStep { NOT_DEALT, CHOOSING_QUE, PLAYING }
+private typealias MjStep = MahjongSession.Step
 
 @Composable
 fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
-    var trainer by remember { mutableStateOf(SichuanTrainer()) }
-    var step by remember { mutableStateOf(MjStep.NOT_DEALT) }
-    var pendingQue by remember { mutableStateOf(Suit.WAN) }
-    var hand by remember { mutableStateOf<List<Tile>>(emptyList()) }
-    var advice by remember { mutableStateOf<String?>(null) }
+    // Restore prior session if any.
+    val savedSession = remember { settings.loadMahjongSession() }
+    var trainer by remember {
+        mutableStateOf(
+            SichuanTrainer().also { t -> savedSession?.let { t.restore(it.snapshot) } },
+        )
+    }
+    var step by remember { mutableStateOf(savedSession?.step ?: MjStep.NOT_DEALT) }
+    var pendingQue by remember { mutableStateOf(savedSession?.pendingQue ?: Suit.WAN) }
+    var hand by remember { mutableStateOf(trainer.hand.toList()) }
+    var advice by remember { mutableStateOf(savedSession?.advice) }
     var loading by remember { mutableStateOf(false) }
     var showGlossary by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -78,6 +88,19 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     fun refreshHand() {
         hand = trainer.hand.toList()
     }
+
+    fun persist() {
+        settings.saveMahjongSession(
+            MahjongSession(
+                step = step,
+                pendingQue = pendingQue,
+                snapshot = trainer.snapshot(),
+                advice = advice,
+            ),
+        )
+    }
+
+    LaunchedEffect(step, pendingQue, hand, advice) { persist() }
 
     Scaffold(
         topBar = {
@@ -144,7 +167,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                             )
                             Spacer(Modifier.height(6.dp))
                             advisories.forEach {
-                                Text("缺${it.suit.cn}：弃后向听 ${it.shantenIfMissing}，该门 ${it.countInSuit} 张")
+                                Text("缺${it.suit.cn}：保留分 ${it.score}（越低越适合缺），该门 ${it.countInSuit} 张")
                             }
                         }
                     }
