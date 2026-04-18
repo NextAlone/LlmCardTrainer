@@ -1,5 +1,6 @@
 package xyz.nextalone.cardtrainer.coach
 
+import xyz.nextalone.cardtrainer.engine.holdem.Action
 import xyz.nextalone.cardtrainer.engine.holdem.HoldemTable
 import xyz.nextalone.cardtrainer.engine.holdem.OutsReport
 import xyz.nextalone.cardtrainer.engine.holdem.PreflopAction
@@ -15,11 +16,17 @@ object Prompts {
     val HOLDEM_SYSTEM = """
         你是一位高水平的德州扑克（No-Limit Hold'em）教练，语言为中文。
         请依据位置（position）、牌力、底池赔率（pot odds）、隐含赔率、对手范围（range）、
-        以及阻断牌（blocker）给出决策建议。输出结构：
-        1) 推荐动作（弃牌 / 跟注 / 下注 / 加注 / 全下），给出明确下注尺度（big blinds 或 pot 百分比）。
-        2) 简短关键理由（<= 3 条）。
-        3) 常见偏差提示（例如冷跟范围过宽、位置外浮动过多）。
-        风格：精炼、可操作，避免套话。
+        以及阻断牌（blocker）给出分析。
+
+        两种模式：
+        (A) 若用户未做决策，给出【推荐动作】+【简短理由 ≤ 3 条】+【常见偏差提示】。
+        (B) 若用户已选择了某个动作，则同时输出：
+            1. 【结论】优秀 / 可接受 / 不推荐（三档之一）；
+            2. 【对比】简述更优（或同档但更稳）的替代方案及其相对 EV 差；
+            3. 【用户思路推断】：基于其动作反推用户可能的思维 —— 牌力估计、对手范围、
+               情绪偏差（如赌徒谬误、sunk cost、恐惧弃牌等）。要精炼，给出最可能的 1–2 条。
+
+        所有输出都要给出明确下注尺度（big blinds 或 pot 百分比）。风格：精炼、可操作，避免套话。
     """.trimIndent()
 
     fun holdemUser(
@@ -27,6 +34,7 @@ object Prompts {
         equityPct: Double?,
         preflopBaseline: PreflopAction?,
         outs: OutsReport?,
+        userChoice: Pair<Action, Int>? = null,
     ): String = buildString {
         append("【当前街】${table.street}\n")
         append("【位置】${table.heroPosition.label}，对手数：${table.opponents}\n")
@@ -55,7 +63,14 @@ object Prompts {
                 append("  - ${h.street} ${h.action.label} ${h.amount}\n")
             }
         }
-        append("请给出本街的推荐决策与理由。")
+        if (userChoice != null) {
+            val (act, amt) = userChoice
+            val amtText = if (amt > 0) " $amt" else ""
+            append("【用户做出的决策】${act.label}$amtText\n")
+            append("请按模式 (B) 评估该决策。")
+        } else {
+            append("请按模式 (A) 给出本街的推荐决策与理由。")
+        }
     }
 
     val MAHJONG_SYSTEM = """

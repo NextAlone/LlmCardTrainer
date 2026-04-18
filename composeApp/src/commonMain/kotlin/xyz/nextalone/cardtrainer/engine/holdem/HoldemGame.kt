@@ -79,5 +79,83 @@ class HoldemTrainer(private val baseSeed: Long? = null) {
         return table.copy(street = next, board = newBoard, toCall = 0)
     }
 
+    /**
+     * Apply the hero's action: record it in the table history, update pot / to-call
+     * / hero stack. Folding sets street to SHOWDOWN (hand ends).
+     */
+    fun applyAction(table: HoldemTable, action: Action, amount: Int): HoldemTable {
+        val record = ActionRecord(
+            street = table.street,
+            action = action,
+            amount = amount,
+            potBefore = table.pot,
+            toCall = table.toCall,
+        )
+        return when (action) {
+            Action.FOLD -> table.copy(
+                history = table.history + record,
+                street = Street.SHOWDOWN,
+            )
+            Action.CHECK -> table.copy(
+                history = table.history + record,
+                toCall = 0,
+            )
+            Action.CALL -> {
+                val paid = table.toCall.coerceAtMost(table.heroStack)
+                table.copy(
+                    history = table.history + record,
+                    pot = table.pot + paid,
+                    heroStack = table.heroStack - paid,
+                    toCall = 0,
+                )
+            }
+            Action.BET, Action.RAISE -> {
+                val paid = amount.coerceAtMost(table.heroStack)
+                table.copy(
+                    history = table.history + record,
+                    pot = table.pot + paid,
+                    heroStack = table.heroStack - paid,
+                    // Assume villain calls for training purposes: toCall goes back to 0
+                    // so we can smoothly advance to the next street.
+                    toCall = 0,
+                )
+            }
+            Action.ALL_IN -> {
+                val paid = table.heroStack
+                table.copy(
+                    history = table.history + record,
+                    pot = table.pot + paid,
+                    heroStack = 0,
+                    toCall = 0,
+                )
+            }
+        }
+    }
+
     private fun randomPosition(): Position = Position.entries.random()
+}
+
+/**
+ * A preset action a user can pick from the UI.
+ */
+data class ActionPreset(val action: Action, val amount: Int, val label: String)
+
+object ActionPresets {
+    /** Build preset buttons appropriate for the current table state. */
+    fun forTable(table: HoldemTable): List<ActionPreset> = buildList {
+        val pot = table.pot
+        val toCall = table.toCall
+        val stack = table.heroStack
+        if (toCall == 0) {
+            add(ActionPreset(Action.CHECK, 0, "过牌"))
+            add(ActionPreset(Action.BET, (pot / 2).coerceAtLeast(1), "下注 ½ 底池"))
+            add(ActionPreset(Action.BET, pot.coerceAtLeast(1), "下注 1 底池"))
+        } else {
+            add(ActionPreset(Action.FOLD, 0, "弃牌"))
+            add(ActionPreset(Action.CALL, toCall, "跟注 $toCall"))
+            add(ActionPreset(Action.RAISE, (toCall * 3).coerceAtMost(stack), "加注 3x"))
+            add(ActionPreset(Action.RAISE, ((pot + toCall) + toCall).coerceAtMost(stack), "加注 pot"))
+        }
+        if (stack > 0) add(ActionPreset(Action.ALL_IN, stack, "全下 $stack"))
+    }
 }

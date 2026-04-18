@@ -4,14 +4,21 @@ package xyz.nextalone.cardtrainer.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -25,11 +32,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import xyz.nextalone.cardtrainer.coach.ProviderConfig
 import xyz.nextalone.cardtrainer.coach.ProviderKind
+import xyz.nextalone.cardtrainer.coach.TestResult
+import xyz.nextalone.cardtrainer.coach.testConnection
 import xyz.nextalone.cardtrainer.storage.AppSettings
 
 @Composable
@@ -40,6 +53,9 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
     var baseUrl by remember(editingKind) { mutableStateOf(settings.baseUrl(editingKind)) }
     var model by remember(editingKind) { mutableStateOf(settings.model(editingKind)) }
     var saved by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<TestResult?>(null) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -66,7 +82,7 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                     Column {
                         FilterChip(
                             selected = isEditing,
-                            onClick = { editingKind = kind; saved = false },
+                            onClick = { editingKind = kind; saved = false; testResult = null },
                             label = {
                                 val tag = if (isActive) "  · 当前使用中" else ""
                                 Text("${kind.label}$tag")
@@ -78,7 +94,7 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
 
             OutlinedTextField(
                 value = apiKey,
-                onValueChange = { apiKey = it; saved = false },
+                onValueChange = { apiKey = it; saved = false; testResult = null },
                 label = { Text("API Key") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -86,34 +102,70 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
             )
             OutlinedTextField(
                 value = baseUrl,
-                onValueChange = { baseUrl = it; saved = false },
+                onValueChange = { baseUrl = it; saved = false; testResult = null },
                 label = { Text("Base URL") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = model,
-                onValueChange = { model = it; saved = false },
+                onValueChange = { model = it; saved = false; testResult = null },
                 label = { Text("模型 ID") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Button(
-                onClick = {
-                    settings.setApiKey(editingKind, apiKey.trim())
-                    settings.setBaseUrl(
-                        editingKind,
-                        baseUrl.trim().ifEmpty { editingKind.defaultBaseUrl },
-                    )
-                    settings.setModel(
-                        editingKind,
-                        model.trim().ifEmpty { editingKind.defaultModel },
-                    )
-                    saved = true
-                },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("保存该接口的配置") }
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = {
+                        settings.setApiKey(editingKind, apiKey.trim())
+                        settings.setBaseUrl(
+                            editingKind,
+                            baseUrl.trim().ifEmpty { editingKind.defaultBaseUrl },
+                        )
+                        settings.setModel(
+                            editingKind,
+                            model.trim().ifEmpty { editingKind.defaultModel },
+                        )
+                        saved = true
+                    },
+                    modifier = Modifier.weight(1f),
+                ) { Text("保存") }
+
+                OutlinedButton(
+                    onClick = {
+                        testResult = null
+                        testing = true
+                        scope.launch {
+                            testResult = testConnection(
+                                ProviderConfig(
+                                    kind = editingKind,
+                                    apiKey = apiKey.trim(),
+                                    baseUrl = baseUrl.trim().ifEmpty { editingKind.defaultBaseUrl },
+                                    model = model.trim().ifEmpty { editingKind.defaultModel },
+                                ),
+                            )
+                            testing = false
+                        }
+                    },
+                    enabled = !testing,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    if (testing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("测试中…")
+                    } else {
+                        Text("测试连接")
+                    }
+                }
+            }
 
             OutlinedButton(
                 onClick = {
@@ -129,13 +181,39 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                 Text("已保存。", color = MaterialTheme.colorScheme.primary)
             }
 
+            testResult?.let { TestResultCard(it) }
+
             Text(
                 "• Anthropic 会自动启用 ephemeral 系统提示缓存。\n" +
                     "• OpenAI 兼容接口同样支持自定义 Base URL：DeepSeek、Moonshot、Together、OpenRouter、Ollama/vLLM 代理均可直接填入。\n" +
-                    "• Key 与 Base URL 仅保存于本机（Android SharedPreferences / macOS java.util.prefs）。",
+                    "• Key 与 Base URL 仅保存于本机（Android 端 EncryptedSharedPreferences / macOS java.util.prefs）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun TestResultCard(result: TestResult) {
+    val (title, body, ok) = when (result) {
+        is TestResult.Ok -> Triple("✅ 连接成功", "模型响应：${result.sample}", true)
+        is TestResult.Fail -> Triple(
+            "❌ ${result.reason}",
+            result.detail ?: "（无细节）",
+            false,
+        )
+    }
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (ok) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.errorContainer,
+        ),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.size(4.dp))
+            Text(body, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
