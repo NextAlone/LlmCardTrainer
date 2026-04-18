@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -71,6 +72,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     var hand by remember { mutableStateOf<List<Tile>>(emptyList()) }
     var advice by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var showGlossary by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun refreshHand() {
@@ -84,6 +86,11 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showGlossary = true }) {
+                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "术语")
                     }
                 },
             )
@@ -232,6 +239,10 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (showGlossary) {
+        GlossaryDialog(kind = GlossaryKind.MAHJONG, onDismiss = { showGlossary = false })
     }
 }
 
