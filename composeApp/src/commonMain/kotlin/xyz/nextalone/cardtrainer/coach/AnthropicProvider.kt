@@ -44,14 +44,26 @@ class AnthropicProvider(
         expectSuccess = true
     }
 
-    override suspend fun coach(systemPrompt: String, userPrompt: String, maxTokens: Int): String {
+    override suspend fun coach(
+        systemPrompt: String,
+        messages: List<ChatTurn>,
+        maxTokens: Int,
+    ): String {
         val request = MessageRequest(
             model = model,
             maxTokens = maxTokens,
             system = listOf(
                 SystemBlock(text = systemPrompt, cacheControl = CacheControl("ephemeral")),
             ),
-            messages = listOf(Message(role = "user", content = userPrompt)),
+            messages = messages.map {
+                Message(
+                    role = when (it.role) {
+                        ChatTurn.Role.USER -> "user"
+                        ChatTurn.Role.ASSISTANT -> "assistant"
+                    },
+                    content = it.content,
+                )
+            },
         )
         val resp: MessageResponse = client.post(endpoint) {
             header("x-api-key", apiKey)
@@ -59,7 +71,8 @@ class AnthropicProvider(
             contentType(ContentType.Application.Json)
             setBody(request)
         }.body()
-        return resp.content.joinToString("\n") { it.text.orEmpty() }
+        val raw = resp.content.joinToString("\n") { it.text.orEmpty() }
+        return ResponseCleanup.clean(raw)
     }
 
     override fun close() = client.close()

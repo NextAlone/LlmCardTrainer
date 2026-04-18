@@ -8,11 +8,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 
 /**
- * Render arbitrary markdown (headings, lists, code, emphasis) with the app's
- * Material 3 theme. Kept in a single place so we can swap the renderer later
- * without touching every call site.
+ * Render arbitrary markdown (headings, lists, code, emphasis, GFM tables)
+ * with the app's Material 3 theme. Uses the GitHub-Flavoured-Markdown flavour
+ * so pipe tables like
+ *
+ *     | 方案 | 尺度 | 逻辑 | 相对 EV |
+ *     | --- | --- | --- | --- |
+ *     | 过牌（推荐） | 0 | 见下 | 基准 |
+ *
+ * actually render as tables instead of a flat line-by-line dump.
  */
 @Composable
 fun AiMarkdown(text: String, modifier: Modifier = Modifier) {
@@ -21,6 +28,7 @@ fun AiMarkdown(text: String, modifier: Modifier = Modifier) {
     ) {
         Markdown(
             content = text,
+            flavour = GFMFlavourDescriptor(),
             colors = com.mikepenz.markdown.m3.markdownColor(
                 text = MaterialTheme.colorScheme.onSurface,
             ),

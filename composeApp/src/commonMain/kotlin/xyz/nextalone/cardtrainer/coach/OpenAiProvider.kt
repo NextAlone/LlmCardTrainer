@@ -45,21 +45,36 @@ class OpenAiProvider(
         expectSuccess = true
     }
 
-    override suspend fun coach(systemPrompt: String, userPrompt: String, maxTokens: Int): String {
-        val request = ChatRequest(
+    override suspend fun coach(
+        systemPrompt: String,
+        messages: List<ChatTurn>,
+        maxTokens: Int,
+    ): String {
+        val body = ChatRequest(
             model = model,
             maxTokens = maxTokens,
-            messages = listOf(
-                ChatMessage(role = "system", content = systemPrompt),
-                ChatMessage(role = "user", content = userPrompt),
-            ),
+            messages = buildList {
+                add(ChatMessage(role = "system", content = systemPrompt))
+                messages.forEach {
+                    add(
+                        ChatMessage(
+                            role = when (it.role) {
+                                ChatTurn.Role.USER -> "user"
+                                ChatTurn.Role.ASSISTANT -> "assistant"
+                            },
+                            content = it.content,
+                        ),
+                    )
+                }
+            },
         )
         val resp: ChatResponse = client.post(endpoint) {
             header("Authorization", "Bearer $apiKey")
             contentType(ContentType.Application.Json)
-            setBody(request)
+            setBody(body)
         }.body()
-        return resp.choices.firstOrNull()?.message?.content.orEmpty()
+        val raw = resp.choices.firstOrNull()?.message?.content.orEmpty()
+        return ResponseCleanup.clean(raw)
     }
 
     override fun close() = client.close()

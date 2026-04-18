@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import xyz.nextalone.cardtrainer.coach.ChatTurn
 import xyz.nextalone.cardtrainer.coach.LlmProviders
 import xyz.nextalone.cardtrainer.coach.Prompts
 import xyz.nextalone.cardtrainer.engine.mahjong.DingQue
@@ -74,6 +75,22 @@ private typealias MjStep = MahjongSession.Step
 // Marker for failure strings saved by pre-retry builds into MahjongSession.advice.
 private const val ERROR_PREFIX = "请求失败："
 
+/** If the session has no turn list but holds a legacy success string, wrap it
+ *  into an assistant-only turn pair so follow-up stays available. */
+private fun migrateLegacyAdvice(turns: List<ChatTurn>, legacy: String?): List<ChatTurn> {
+    if (turns.isNotEmpty()) return turns
+    val clean = legacy?.takeUnless { it.startsWith(ERROR_PREFIX) } ?: return emptyList()
+    return listOf(
+        ChatTurn(ChatTurn.Role.USER, "（初始分析请求）"),
+        ChatTurn(ChatTurn.Role.ASSISTANT, clean),
+    )
+}
+
+private fun legacyAdviceError(legacy: String?, turns: List<ChatTurn>): String? {
+    if (turns.isNotEmpty()) return null
+    return legacy?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX)
+}
+
 @Composable
 fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     // Restore prior session if any.
@@ -86,11 +103,13 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     var step by remember { mutableStateOf(savedSession?.step ?: MjStep.NOT_DEALT) }
     var pendingQue by remember { mutableStateOf(savedSession?.pendingQue ?: Suit.WAN) }
     var hand by remember { mutableStateOf(trainer.hand.toList()) }
-    // Pre-retry builds saved failure messages straight into `advice`; shunt
-    // them into adviceError at load time so the retry button appears.
-    var advice by remember { mutableStateOf(savedSession?.advice?.takeUnless { it.startsWith(ERROR_PREFIX) }) }
+    // Multi-turn coach chat. Index 0 = structured initial prompt (hidden from
+    // UI); subsequent turns alternate user follow-ups and assistant replies.
+    var adviceTurns by remember {
+        mutableStateOf(migrateLegacyAdvice(savedSession?.adviceTurns ?: emptyList(), savedSession?.advice))
+    }
     var adviceError by remember {
-        mutableStateOf(savedSession?.advice?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX))
+        mutableStateOf(legacyAdviceError(savedSession?.advice, savedSession?.adviceTurns ?: emptyList()))
     }
     var loading by remember { mutableStateOf(false) }
     var showGlossary by remember { mutableStateOf(false) }
@@ -106,12 +125,42 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                 step = step,
                 pendingQue = pendingQue,
                 snapshot = trainer.snapshot(),
-                advice = advice,
+                adviceTurns = adviceTurns,
             ),
         )
     }
 
-    LaunchedEffect(step, pendingQue, hand, advice) { persist() }
+    LaunchedEffect(step, pendingQue, hand, adviceTurns) { persist() }
+
+    fun buildInitialPrompt(): String {
+        val suggestions = if (hand.size == 14) trainer.rankDiscards() else emptyList()
+        val liveWaits = UkeIre.waitingWithCounts(
+            hand = if (hand.size == 14 && suggestions.isNotEmpty())
+                hand.toMutableList().also { it.remove(suggestions.first().tile) }
+            else hand,
+            visible = trainer.discards.toList(),
+            missing = trainer.missing,
+        )
+        val candidates = suggestions.map { it.tile }
+        val safety = Safety.rank(
+            candidates = candidates.ifEmpty { hand },
+            ownDiscards = trainer.discards.toList(),
+            opponentDiscards = trainer.opponentDiscards(),
+        )
+        val typeReport = if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, trainer.missing)) {
+            HandType.classify(hand)
+        } else null
+        return Prompts.mahjongUser(
+            hand = hand,
+            missing = trainer.missing!!,
+            discards = trainer.discards.toList(),
+            suggestions = suggestions,
+            wallRemaining = trainer.wallRemaining(),
+            liveWaits = liveWaits,
+            safety = safety,
+            handType = typeReport,
+        )
+    }
 
     fun askCoach() {
         val cfg = settings.activeConfig()
@@ -119,45 +168,42 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
             adviceError = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
             return
         }
+        val seedTurns = listOf(ChatTurn(ChatTurn.Role.USER, buildInitialPrompt()))
         loading = true
         adviceError = null
         scope.launch {
             val coach = LlmProviders.create(cfg)
             try {
-                val suggestions = if (hand.size == 14) trainer.rankDiscards() else emptyList()
-                val liveWaits = UkeIre.waitingWithCounts(
-                    hand = if (hand.size == 14 && suggestions.isNotEmpty())
-                        hand.toMutableList().also { it.remove(suggestions.first().tile) }
-                    else hand,
-                    visible = trainer.discards.toList(),
-                    missing = trainer.missing,
-                )
-                val candidates = suggestions.map { it.tile }
-                val safety = Safety.rank(
-                    candidates = candidates.ifEmpty { hand },
-                    ownDiscards = trainer.discards.toList(),
-                    opponentDiscards = trainer.opponentDiscards(),
-                )
-                val typeReport = if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, trainer.missing)) {
-                    HandType.classify(hand)
-                } else null
-                val result = withRetry {
-                    coach.coach(
-                        systemPrompt = Prompts.MAHJONG_SYSTEM,
-                        userPrompt = Prompts.mahjongUser(
-                            hand = hand,
-                            missing = trainer.missing!!,
-                            discards = trainer.discards.toList(),
-                            suggestions = suggestions,
-                            wallRemaining = trainer.wallRemaining(),
-                            liveWaits = liveWaits,
-                            safety = safety,
-                            handType = typeReport,
-                        ),
-                    )
+                val reply = withRetry {
+                    coach.coach(systemPrompt = Prompts.MAHJONG_SYSTEM, messages = seedTurns)
                 }
-                advice = result
+                adviceTurns = seedTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
                 adviceError = null
+            } catch (t: Throwable) {
+                adviceError = t.message ?: t::class.simpleName ?: "未知错误"
+            } finally {
+                coach.close()
+                loading = false
+            }
+        }
+    }
+
+    fun followUpAdvice(question: String) {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            adviceError = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        val priorTurns = adviceTurns + ChatTurn(ChatTurn.Role.USER, question)
+        loading = true
+        adviceError = null
+        scope.launch {
+            val coach = LlmProviders.create(cfg)
+            try {
+                val reply = withRetry {
+                    coach.coach(systemPrompt = Prompts.MAHJONG_SYSTEM, messages = priorTurns)
+                }
+                adviceTurns = priorTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
             } catch (t: Throwable) {
                 adviceError = t.message ?: t::class.simpleName ?: "未知错误"
             } finally {
@@ -170,7 +216,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     fun resetGame() {
         trainer = SichuanTrainer()
         hand = emptyList()
-        advice = null
+        adviceTurns = emptyList()
         adviceError = null
         step = MjStep.NOT_DEALT
     }
@@ -290,7 +336,8 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                             trainer.drawTile()
                             refreshHand()
                             step = MjStep.PLAYING
-                            advice = null
+                            adviceTurns = emptyList()
+                            adviceError = null
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("确认定缺并摸牌") }
@@ -300,16 +347,18 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                     trainer = trainer,
                     hand = hand,
                     missing = trainer.missing!!,
-                    advice = advice,
+                    adviceTurns = adviceTurns,
                     adviceError = adviceError,
+                    loadingAdvice = loading,
                     onRetryAdvice = ::askCoach,
+                    onFollowUpAdvice = ::followUpAdvice,
                     onDiscard = { tile ->
                         trainer.discard(tile)
                         // 3 bots draw+discard, then hero draws — this is the
                         // real 4-seat round structure.
                         trainer.runOpponentsAndDraw()
                         refreshHand()
-                        advice = null
+                        adviceTurns = emptyList()
                         adviceError = null
                     },
                 )
@@ -327,9 +376,11 @@ private fun PlayingContent(
     trainer: SichuanTrainer,
     hand: List<Tile>,
     missing: Suit,
-    advice: String?,
+    adviceTurns: List<ChatTurn>,
     adviceError: String?,
+    loadingAdvice: Boolean,
     onRetryAdvice: () -> Unit,
+    onFollowUpAdvice: (String) -> Unit,
     onDiscard: (Tile) -> Unit,
 ) {
     val shanten = remember(hand) { HandCheck.shanten(hand, missing) }
@@ -429,37 +480,17 @@ private fun PlayingContent(
     // Tile pool — every tile with its remaining unseen count.
     TilePoolPanel(unseen = trainer.unseenByTile())
 
-    advice?.let {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-        ) {
-            AiMarkdown(it)
-        }
-    }
-
-    adviceError?.let { err ->
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-            ),
-        ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "请求失败：$err",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                )
-                FilledTonalButton(onClick = onRetryAdvice) {
-                    Icon(
-                        Icons.Default.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text("重试")
-                }
-            }
-        }
+    if (adviceTurns.isNotEmpty() || adviceError != null || loadingAdvice) {
+        AiConversation(
+            title = "AI 教练建议",
+            turns = adviceTurns,
+            loading = loadingAdvice,
+            error = adviceError,
+            onRetry = onRetryAdvice,
+            onFollowUp = onFollowUpAdvice,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            onContainerColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
     }
 }
 

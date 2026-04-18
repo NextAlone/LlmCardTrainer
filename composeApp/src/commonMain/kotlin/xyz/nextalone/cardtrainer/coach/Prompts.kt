@@ -1,6 +1,8 @@
 package xyz.nextalone.cardtrainer.coach
 
 import xyz.nextalone.cardtrainer.engine.holdem.Action
+import xyz.nextalone.cardtrainer.engine.holdem.DrawSummary
+import xyz.nextalone.cardtrainer.engine.holdem.HandCategory
 import xyz.nextalone.cardtrainer.engine.holdem.HoldemTable
 import xyz.nextalone.cardtrainer.engine.holdem.OutsReport
 import xyz.nextalone.cardtrainer.engine.holdem.PreflopAction
@@ -10,6 +12,18 @@ import xyz.nextalone.cardtrainer.engine.mahjong.LiveWait
 import xyz.nextalone.cardtrainer.engine.mahjong.SafetyScore
 import xyz.nextalone.cardtrainer.engine.mahjong.Suit
 import xyz.nextalone.cardtrainer.engine.mahjong.Tile
+
+private val OUTPUT_RULES = """
+
+    输出约束（必须遵守）：
+    - 全部使用简体中文。不得出现任何英文段落、推理过程（chain-of-thought）、或
+      以 "We need to" / "Actually" / "Let me" 等开头的自语思考内容。
+    - 禁止输出 <think>…</think> 或 <thinking>…</thinking> 块，也禁止把内部推理
+      写进正文。直接给最终结论即可。
+    - 使用 Markdown 排版；需要对比时使用 GFM 管道表格（| 列1 | 列2 |）而不是
+      换行罗列。
+    - 若引用了数字（胜率/底池/outs/向听）请使用上方【】里给出的值，不要自行臆造。
+""".trimIndent()
 
 object Prompts {
 
@@ -22,18 +36,20 @@ object Prompts {
         (A) 若用户未做决策，给出【推荐动作】+【简短理由 ≤ 3 条】+【常见偏差提示】。
         (B) 若用户已选择了某个动作，则同时输出：
             1. 【结论】优秀 / 可接受 / 不推荐（三档之一）；
-            2. 【对比】简述更优（或同档但更稳）的替代方案及其相对 EV 差；
+            2. 【对比】用 GFM 管道表格列出当前动作 vs 更优替代方案的尺度、EV 估算；
             3. 【用户思路推断】：基于其动作反推用户可能的思维 —— 牌力估计、对手范围、
-               情绪偏差（如赌徒谬误、sunk cost、恐惧弃牌等）。要精炼，给出最可能的 1–2 条。
+               情绪偏差（如赌徒谬误、sunk cost、恐惧弃牌等）。精炼，1–2 条。
 
-        所有输出都要给出明确下注尺度（big blinds 或 pot 百分比）。风格：精炼、可操作，避免套话。
-    """.trimIndent()
+        所有输出都要给出明确下注尺度（big blinds 或 pot 百分比）。风格：精炼、可操作。
+    """.trimIndent() + "\n" + OUTPUT_RULES
 
     fun holdemUser(
         table: HoldemTable,
         equityPct: Double?,
         preflopBaseline: PreflopAction?,
         outs: OutsReport?,
+        madeHand: HandCategory? = null,
+        draws: List<DrawSummary> = emptyList(),
         userChoice: Pair<Action, Int>? = null,
     ): String = buildString {
         append("【当前街】${table.street}\n")
@@ -41,6 +57,15 @@ object Prompts {
         append("【手牌】${table.hero.joinToString(" ") { it.label }}\n")
         if (table.board.isNotEmpty()) {
             append("【公共牌】${table.board.joinToString(" ") { it.label }}\n")
+        }
+        if (madeHand != null && table.board.size >= 3) {
+            val label = if (table.street.name == "RIVER") "最终牌型" else "当前已成牌型"
+            append("【$label】${madeHand.displayName}\n")
+        }
+        if (draws.isNotEmpty() && table.board.size in 3..4) {
+            append("【听牌】")
+            append(draws.joinToString("、") { "${it.tag}(${it.outs} outs)" })
+            append('\n')
         }
         append("【底池】${table.pot}，【跟注额】${table.toCall}，【我的筹码】${table.heroStack}，【对手筹码】${table.villainStack}\n")
         if (table.toCall > 0) {
@@ -55,7 +80,7 @@ object Prompts {
             append("【翻前基线】位置 ${table.heroPosition.label} 的 RFI 建议：$preflopBaseline\n")
         }
         if (outs != null) {
-            append("【Outs】${outs.outs} 张（Turn 概率 ≈ ${outs.turnPct}%，Turn+River ≈ ${outs.turnAndRiverPct}%）\n")
+            append("【Outs（任意牌型升级）】${outs.outs} 张（Turn ≈ ${outs.turnPct}%，Turn+River ≈ ${outs.turnAndRiverPct}%）\n")
         }
         if (table.history.isNotEmpty()) {
             append("【行动历史】\n")
@@ -83,7 +108,7 @@ object Prompts {
         2) 原因（向听数变化、进张数、牌型潜力、弃牌者安全度）。
         3) 注意事项（缺门一致性、防炮、杠上花/抢杠胡 等关键时机）。
         风格：简练、直给操作，不啰嗦。
-    """.trimIndent()
+    """.trimIndent() + "\n" + OUTPUT_RULES
 
     fun mahjongUser(
         hand: List<Tile>,

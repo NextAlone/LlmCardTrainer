@@ -21,7 +21,29 @@ data class ProviderConfig(
 )
 
 interface LlmProvider {
-    suspend fun coach(systemPrompt: String, userPrompt: String, maxTokens: Int = 600): String
+    /**
+     * Send a multi-turn conversation to the model and return the next
+     * assistant reply as plain text. Callers should append the returned
+     * string to their own turn list as an ASSISTANT turn, then pass the
+     * extended list back on the next follow-up call.
+     */
+    suspend fun coach(
+        systemPrompt: String,
+        messages: List<ChatTurn>,
+        maxTokens: Int = 600,
+    ): String
+
+    /** Convenience: one-shot single-user-turn call. */
+    suspend fun coach(
+        systemPrompt: String,
+        userPrompt: String,
+        maxTokens: Int = 600,
+    ): String = coach(
+        systemPrompt = systemPrompt,
+        messages = listOf(ChatTurn(ChatTurn.Role.USER, userPrompt)),
+        maxTokens = maxTokens,
+    )
+
     fun close()
 }
 
