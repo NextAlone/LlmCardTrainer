@@ -50,7 +50,9 @@ object HandCheck {
      *  - 13-tile input: success = waitingTiles non-empty (equivalent to: ∃ legal draw
      *    t such that hand+t is winning).
      *
-     * Depth cap = 4 to keep interactive latency low; returns 4 when further away.
+     * Depth cap = 2 to keep interactive latency <~50ms; distinguishing 0 / 1 /
+     * 2 shanten is what matters for discard decisions. Hands further from tenpai
+     * simply report the cap (2) which is good enough for UI.
      */
     fun shanten(hand: List<Tile>, missing: Suit? = null): Int {
         if (isWinning(hand, missing)) return -1
@@ -58,7 +60,7 @@ object HandCheck {
             // Shortcut: tenpai check before launching expensive search.
             if (isTing(hand, missing)) return 0
         }
-        val maxDepth = 4
+        val maxDepth = 2
         val handCounts = toCounts(hand)
         val isThirteen = hand.size == 13
         return searchShanten(handCounts, missing, 0, maxDepth, isThirteen) ?: maxDepth
