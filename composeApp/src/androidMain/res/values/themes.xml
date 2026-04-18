@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      Minimal Material theme. Status-bar color and light/dark icon control are
+      handled in code via enableEdgeToEdge() so they always match whichever
+      Compose surface is currently painted behind the status bar.
+    -->
     <style name="Theme.CardTrainer" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">#FF0E7C3A</item>
         <item name="android:windowBackground">@android:color/white</item>
     </style>
 </resources>

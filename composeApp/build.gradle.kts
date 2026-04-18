@@ -69,11 +69,11 @@ kotlin {
 }
 
 android {
-    namespace = "com.nextalone.cardtrainer"
+    namespace = "xyz.nextalone.cardtrainer"
     compileSdk = libs.versions.android.compile.sdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.nextalone.cardtrainer"
+        applicationId = "xyz.nextalone.cardtrainer"
         minSdk = libs.versions.android.min.sdk.get().toInt()
         targetSdk = libs.versions.android.target.sdk.get().toInt()
         versionCode = 1
@@ -114,7 +114,7 @@ android {
 
 compose.desktop {
     application {
-        mainClass = "com.nextalone.cardtrainer.MainKt"
+        mainClass = "xyz.nextalone.cardtrainer.MainKt"
 
         // macOS arm64 only: the output architecture matches the JDK running
         // jpackage, so CI uses the macos-14 (Apple Silicon) runner with an
@@ -126,7 +126,7 @@ compose.desktop {
             packageVersion = "1.0.0"
 
             macOS {
-                bundleID = "com.nextalone.cardtrainer"
+                bundleID = "xyz.nextalone.cardtrainer"
                 minimumSystemVersion = "11.0"
                 dmgPackageVersion = "1.0.0"
                 pkgPackageVersion = "1.0.0"
