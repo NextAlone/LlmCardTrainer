@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.nextalone.cardtrainer.ui
 
 import androidx.compose.foundation.background
@@ -22,7 +24,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,7 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.nextalone.cardtrainer.coach.ClaudeCoach
+import com.nextalone.cardtrainer.coach.LlmProviders
 import com.nextalone.cardtrainer.coach.Prompts
 import com.nextalone.cardtrainer.engine.holdem.Card as PokerCard
 import com.nextalone.cardtrainer.engine.holdem.Equity
@@ -58,7 +59,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     val trainer = remember { HoldemTrainer() }
@@ -150,15 +150,15 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
 
             Button(
                 onClick = {
-                    val key = settings.apiKey
-                    if (key.isBlank()) {
-                        advice = "请先在『设置』中填写 Anthropic API Key。"
+                    val cfg = settings.activeConfig()
+                    if (cfg.apiKey.isBlank()) {
+                        advice = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
                         return@Button
                     }
                     loadingAdvice = true
                     scope.launch {
+                        val coach = LlmProviders.create(cfg)
                         try {
-                            val coach = ClaudeCoach(apiKey = key, model = settings.model)
                             advice = coach.coach(
                                 systemPrompt = Prompts.HOLDEM_SYSTEM,
                                 userPrompt = Prompts.holdemUser(
@@ -168,10 +168,10 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                                     outs = outs,
                                 ),
                             )
-                            coach.close()
                         } catch (t: Throwable) {
                             advice = "请求失败：${t.message}"
                         } finally {
+                            coach.close()
                             loadingAdvice = false
                         }
                     }

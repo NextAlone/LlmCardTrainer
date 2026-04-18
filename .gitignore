@@ -1,6 +1,7 @@
 .gradle/
 build/
 */build/
+!gradle/wrapper/
 .idea/
 *.iml
 *.hprof

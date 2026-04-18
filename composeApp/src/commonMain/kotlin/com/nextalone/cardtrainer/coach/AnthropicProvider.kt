@@ -14,22 +14,19 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * Minimal Claude Messages API client.
+ * Anthropic Messages API client (POST {baseUrl}/v1/messages).
  *
- * Endpoint: https://api.anthropic.com/v1/messages
- * Auth: x-api-key header (per-user key stored locally in Settings).
- * Prompt caching: system prompt is marked `cache_control: ephemeral` so repeated
- * coaching calls reuse the cached prefix at ~10% of input cost.
+ * Auth: `x-api-key` header.
+ * System prompt is marked `cache_control: ephemeral` so repeated coaching calls
+ * reuse the cached prefix at ~10% of input cost.
  */
-class ClaudeCoach(
+class AnthropicProvider(
     private val apiKey: String,
-    private val model: String = DEFAULT_MODEL,
-) {
-    companion object {
-        const val DEFAULT_MODEL = "claude-sonnet-4-6"
-        const val ENDPOINT = "https://api.anthropic.com/v1/messages"
-        const val API_VERSION = "2023-06-01"
-    }
+    baseUrl: String,
+    private val model: String,
+) : LlmProvider {
+
+    private val endpoint = baseUrl.trimEnd('/') + "/v1/messages"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -40,22 +37,16 @@ class ClaudeCoach(
         install(ContentNegotiation) { json(json) }
     }
 
-    suspend fun coach(
-        systemPrompt: String,
-        userPrompt: String,
-        maxTokens: Int = 600,
-    ): String {
+    override suspend fun coach(systemPrompt: String, userPrompt: String, maxTokens: Int): String {
         val request = MessageRequest(
             model = model,
             maxTokens = maxTokens,
             system = listOf(
                 SystemBlock(text = systemPrompt, cacheControl = CacheControl("ephemeral")),
             ),
-            messages = listOf(
-                Message(role = "user", content = userPrompt),
-            ),
+            messages = listOf(Message(role = "user", content = userPrompt)),
         )
-        val resp: MessageResponse = client.post(ENDPOINT) {
+        val resp: MessageResponse = client.post(endpoint) {
             header("x-api-key", apiKey)
             header("anthropic-version", API_VERSION)
             contentType(ContentType.Application.Json)
@@ -64,7 +55,9 @@ class ClaudeCoach(
         return resp.content.joinToString("\n") { it.text.orEmpty() }
     }
 
-    fun close() = client.close()
+    override fun close() = client.close()
+
+    companion object { private const val API_VERSION = "2023-06-01" }
 }
 
 @Serializable
@@ -99,10 +92,7 @@ private data class MessageResponse(
 )
 
 @Serializable
-private data class ContentBlock(
-    val type: String,
-    val text: String? = null,
-)
+private data class ContentBlock(val type: String, val text: String? = null)
 
 @Serializable
 private data class Usage(

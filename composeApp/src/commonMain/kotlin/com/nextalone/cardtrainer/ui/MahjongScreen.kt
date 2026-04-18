@@ -1,3 +1,8 @@
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+)
+
 package com.nextalone.cardtrainer.ui
 
 import androidx.compose.foundation.background
@@ -23,7 +28,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -44,7 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.nextalone.cardtrainer.coach.ClaudeCoach
+import com.nextalone.cardtrainer.coach.LlmProviders
 import com.nextalone.cardtrainer.coach.Prompts
 import com.nextalone.cardtrainer.engine.mahjong.DingQue
 import com.nextalone.cardtrainer.engine.mahjong.HandCheck
@@ -59,7 +63,6 @@ import kotlinx.coroutines.launch
 
 private enum class MjStep { NOT_DEALT, CHOOSING_QUE, PLAYING }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     var trainer by remember { mutableStateOf(SichuanTrainer()) }
@@ -173,15 +176,15 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                         advice = null
                     },
                     onAskCoach = {
-                        val key = settings.apiKey
-                        if (key.isBlank()) {
-                            advice = "请先在『设置』中填写 Anthropic API Key。"
+                        val cfg = settings.activeConfig()
+                        if (cfg.apiKey.isBlank()) {
+                            advice = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
                             return@PlayingContent
                         }
                         loading = true
                         scope.launch {
+                            val coach = LlmProviders.create(cfg)
                             try {
-                                val coach = ClaudeCoach(apiKey = key, model = settings.model)
                                 val suggestions = if (hand.size == 14) trainer.rankDiscards() else emptyList()
                                 val liveWaits = UkeIre.waitingWithCounts(
                                     hand = if (hand.size == 14 && suggestions.isNotEmpty())
@@ -212,10 +215,10 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                                         handType = typeReport,
                                     ),
                                 )
-                                coach.close()
                             } catch (t: Throwable) {
                                 advice = "请求失败：${t.message}"
                             } finally {
+                                coach.close()
                                 loading = false
                             }
                         }

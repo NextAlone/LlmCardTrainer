@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Build Android APK (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Assemble debug APK
+        run: ./gradlew :composeApp:assembleDebug --no-daemon --stacktrace
+
+      - name: Locate APK
+        id: apk
+        run: |
+          apk=$(find composeApp/build/outputs/apk/debug -name '*arm64-v8a*.apk' -print -quit)
+          if [ -z "$apk" ]; then
+            apk=$(find composeApp/build/outputs/apk/debug -name '*.apk' -print -quit)
+          fi
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+          echo "Found APK: $apk"
+
+      - name: Upload APK
+        if: steps.apk.outputs.path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: LlmCardTrainer-debug-arm64
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: Build macOS arm64 (dmg)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm arm64 runner
+        run: |
+          uname -m
+          sysctl -n machdep.cpu.brand_string || true
+
+      - name: Set up JDK 17 (aarch64)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          architecture: aarch64
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Package DMG
+        run: ./gradlew :composeApp:packageDmg --no-daemon --stacktrace
+
+      - name: Locate DMG
+        id: dmg
+        run: |
+          dmg=$(find composeApp/build/compose/binaries/main/dmg -name '*.dmg' -print -quit)
+          echo "path=$dmg" >> "$GITHUB_OUTPUT"
+          echo "Found DMG: $dmg"
+
+      - name: Upload DMG
+        if: steps.dmg.outputs.path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: LlmCardTrainer-macos-arm64
+          path: ${{ steps.dmg.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+

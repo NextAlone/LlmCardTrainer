@@ -77,6 +77,21 @@ android {
         targetSdk = libs.versions.android.target.sdk.get().toInt()
         versionCode = 1
         versionName = "0.1.0"
+
+        ndk {
+            // arm64 only (per project requirement).
+            abiFilters.clear()
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a")
+            isUniversalApk = false
+        }
     }
 
     compileOptions {
@@ -108,6 +123,9 @@ compose.desktop {
     application {
         mainClass = "com.nextalone.cardtrainer.MainKt"
 
+        // macOS arm64 only: the output architecture matches the JDK running
+        // jpackage, so CI uses the macos-14 (Apple Silicon) runner with an
+        // aarch64 JDK. minimumSystemVersion is set accordingly.
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Pkg)
             packageName = "LlmCardTrainer"
@@ -115,6 +133,7 @@ compose.desktop {
 
             macOS {
                 bundleID = "com.nextalone.cardtrainer"
+                minimumSystemVersion = "11.0"
             }
         }
     }
