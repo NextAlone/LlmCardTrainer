@@ -36,6 +36,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -224,6 +225,36 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 },
             )
         },
+        bottomBar = {
+            // Pinned navigation: 发下一街 + 新牌局 only appear after the user has
+            // submitted their decision; before that, DecidingBlock shows its own
+            // 提交 / 新牌局 buttons.
+            if (phase == Phase.SUBMITTED) {
+                Surface(tonalElevation = 3.dp) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (table.street != Street.SHOWDOWN) {
+                            FilledTonalButton(
+                                onClick = {
+                                    table = trainer.advanceStreet(table)
+                                    phase = Phase.DECIDING
+                                    userChoice = null
+                                    choiceEvaluation = null
+                                    situationAnalysis = null
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("发下一街") }
+                        }
+                        OutlinedButton(
+                            onClick = ::startNewHand,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("新牌局") }
+                    }
+                }
+            }
+        },
     ) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)
@@ -265,16 +296,6 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     situationAnalysis = situationAnalysis,
                     choiceEvaluation = choiceEvaluation,
                     loadingEvaluation = loadingEvaluation,
-                    onAdvance = {
-                        if (table.street != Street.SHOWDOWN) {
-                            table = trainer.advanceStreet(table)
-                            phase = Phase.DECIDING
-                            userChoice = null
-                            choiceEvaluation = null
-                            situationAnalysis = null
-                        }
-                    },
-                    onNewHand = ::startNewHand,
                 )
             }
         }
@@ -338,8 +359,6 @@ private fun SubmittedBlock(
     situationAnalysis: String?,
     choiceEvaluation: String?,
     loadingEvaluation: Boolean,
-    onAdvance: () -> Unit,
-    onNewHand: () -> Unit,
 ) {
     userChoice?.let { (a, amt) ->
         val tag = if (amt > 0) " $amt" else ""
@@ -355,19 +374,20 @@ private fun SubmittedBlock(
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("算法结果", fontWeight = FontWeight.SemiBold)
-            equityPct?.let {
-                val r = kotlin.math.round(it * 10) / 10
-                Text("· 胜率 ≈ $r%")
+            val parts = buildList {
+                equityPct?.let { add("胜率 ≈ ${kotlin.math.round(it * 10) / 10}%") }
+                outs?.let { add("Outs ${it.outs} (${it.turnPct}%/${it.turnAndRiverPct}%)") }
+                preflopBaseline?.let { add("RFI: $it") }
+                if (table.toCall > 0) {
+                    val o = kotlin.math.round(table.potOdds * 1000) / 10
+                    add("赔率 $o%")
+                }
             }
-            outs?.let {
-                Text("· Outs ${it.outs}（Rule of 2/4：${it.turnPct}% / ${it.turnAndRiverPct}%）")
-            }
-            preflopBaseline?.let {
-                Text("· 翻前 RFI 基线：$it")
-            }
-            if (table.toCall > 0) {
-                val o = kotlin.math.round(table.potOdds * 1000) / 10
-                Text("· 底池赔率：$o%")
+            if (parts.isNotEmpty()) {
+                Text(
+                    parts.joinToString("  ·  "),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
         }
     }
@@ -376,14 +396,13 @@ private fun SubmittedBlock(
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
         ) {
-            Column(Modifier.padding(14.dp)) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 Text(
                     "AI 牌局分析（独立视角）",
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onTertiaryContainer,
                 )
-                Spacer(Modifier.height(6.dp))
-                Text(situationAnalysis, style = MaterialTheme.typography.bodyMedium)
+                AiMarkdown(situationAnalysis)
             }
         }
     }
@@ -407,10 +426,7 @@ private fun SubmittedBlock(
                     Spacer(Modifier.width(8.dp))
                     Text("AI 评价生成中…")
                 }
-                choiceEvaluation != null -> Text(
-                    choiceEvaluation,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                choiceEvaluation != null -> AiMarkdown(choiceEvaluation)
                 else -> Text(
                     "（暂无，请检查 API Key / 网络）",
                     style = MaterialTheme.typography.bodyMedium,
@@ -418,22 +434,6 @@ private fun SubmittedBlock(
                 )
             }
         }
-    }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (table.street != Street.SHOWDOWN) {
-            FilledTonalButton(
-                onClick = onAdvance,
-                modifier = Modifier.weight(1f),
-            ) { Text("发下一街") }
-        }
-        OutlinedButton(
-            onClick = onNewHand,
-            modifier = Modifier.weight(1f),
-        ) { Text("新牌局") }
     }
 }
 

@@ -44,6 +44,8 @@ kotlin {
 
                 implementation(libs.multiplatform.settings)
                 implementation(libs.multiplatform.settings.coroutines)
+
+                implementation(libs.multiplatform.markdown.renderer.m3)
             }
         }
 
