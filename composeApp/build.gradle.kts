@@ -80,18 +80,10 @@ android {
         versionName = "0.1.0"
 
         ndk {
-            // arm64 only (per project requirement).
+            // arm64 only (per project requirement). Produces a single APK that
+            // bundles only arm64-v8a native libs — no `splits` block needed.
             abiFilters.clear()
             abiFilters += "arm64-v8a"
-        }
-    }
-
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a")
-            isUniversalApk = false
         }
     }
 
