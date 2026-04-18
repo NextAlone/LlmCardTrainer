@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -85,6 +86,7 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     var loadingEvaluation by remember { mutableStateOf(false) }
 
     var userChoice by remember { mutableStateOf<Pair<Action, Int>?>(null) }
+    var showGlossary by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     val preflopBaseline = remember(table.hero, table.heroPosition) {
@@ -183,6 +185,11 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
+                actions = {
+                    IconButton(onClick = { showGlossary = true }) {
+                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "术语")
+                    }
+                },
             )
         },
     ) { padding ->
@@ -239,6 +246,10 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (showGlossary) {
+        GlossaryDialog(kind = GlossaryKind.POKER, onDismiss = { showGlossary = false })
     }
 }
 
