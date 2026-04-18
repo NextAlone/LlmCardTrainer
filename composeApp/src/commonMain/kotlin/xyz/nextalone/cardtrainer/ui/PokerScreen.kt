@@ -76,6 +76,11 @@ import xyz.nextalone.cardtrainer.util.withRetry
 
 private typealias Phase = PokerSession.Phase
 
+// Marker used by pre-retry builds when an AI call failed — stored directly in
+// PokerSession.situationAnalysis / choiceEvaluation. We migrate such legacy
+// strings into the new error-state slots at session-load time.
+private const val ERROR_PREFIX = "请求失败："
+
 @Composable
 fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     val trainer = remember { HoldemTrainer() }
@@ -93,12 +98,15 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     var equityPct by remember { mutableStateOf<Double?>(null) }
     var outs by remember { mutableStateOf<OutsReport?>(null) }
     // AI-provided situation analysis, pre-computed in background during DECIDING.
-    var situationAnalysis by remember { mutableStateOf(initial.situationAnalysis) }
-    var situationError by remember { mutableStateOf<String?>(null) }
+    // Pre-retry builds stored error strings directly in *Analysis/*Evaluation;
+    // partition those out to the error field at load time so the retry button
+    // appears for legacy sessions.
+    var situationAnalysis by remember { mutableStateOf(initial.situationAnalysis?.takeUnless { it.startsWith(ERROR_PREFIX) }) }
+    var situationError by remember { mutableStateOf(initial.situationAnalysis?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX)) }
     var loadingSituation by remember { mutableStateOf(false) }
     // AI-provided choice evaluation, computed after submit.
-    var choiceEvaluation by remember { mutableStateOf(initial.choiceEvaluation) }
-    var evaluationError by remember { mutableStateOf<String?>(null) }
+    var choiceEvaluation by remember { mutableStateOf(initial.choiceEvaluation?.takeUnless { it.startsWith(ERROR_PREFIX) }) }
+    var evaluationError by remember { mutableStateOf(initial.choiceEvaluation?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX)) }
     var loadingEvaluation by remember { mutableStateOf(false) }
 
     var userChoice by remember {
