@@ -17,16 +17,23 @@
   - 有效进张 + 活墙剩余枚数
   - 弃牌候选综合评分 + 安全度（现张、边张）
 
-每次把上述结构化数据送入 Claude（`x-api-key` + `ephemeral` 缓存系统提示词），让模型给出
-推荐动作 + 简短理由 + 偏差提示。
+每次把上述结构化数据送入 LLM，让模型给出推荐动作 + 简短理由 + 偏差提示。
+
+支持两种 LLM 接口，并可自定义 Base URL：
+
+- **Anthropic**（默认 `https://api.anthropic.com`）— `x-api-key`，系统提示启用 `ephemeral` 缓存。
+- **OpenAI / 兼容**（默认 `https://api.openai.com/v1`）— `Authorization: Bearer`，任何
+  `/chat/completions` 兼容端点均可（DeepSeek / Moonshot / Together / OpenRouter / Ollama-OpenAI 桥 / vLLM …）。
+
+在设置页可分别保存两套配置，再切换当前使用的接口。
 
 ## 技术栈
 
 - **Kotlin Multiplatform 2.1** + **Compose Multiplatform 1.7**
-- **Android** 目标：`composeApp:assembleDebug`
-- **macOS 目标**：通过 Desktop (JVM) + `jpackage` 生成原生 `.dmg`/`.pkg`
+- **Android**：arm64-v8a only（APK）
+- **macOS**：arm64 only（Apple Silicon），通过 Desktop JVM + `jpackage` 输出 `.dmg`/`.pkg`
 - **Ktor 3** HTTP 客户端（OkHttp on Android/JVM）
-- **multiplatform-settings** 本地保存 API Key
+- **multiplatform-settings** 本地保存配置
 
 ## 准备
 
@@ -37,25 +44,19 @@
    sdk.dir=/Users/you/Library/Android/sdk
    ```
 
-3. 首次运行（Gradle Wrapper 尚未包含，执行以生成）：
-
-   ```bash
-   gradle wrapper --gradle-version 8.9
-   ```
-
-4. 启动 App 后进入「设置」，填入你的 Anthropic API Key（仅保存于本机：Android
-   SharedPreferences / macOS `java.util.prefs`）。
+3. 启动 App 后进入「设置」，选择接口类型（Anthropic / OpenAI 兼容），填 API Key + Base URL + 模型 ID。
+   配置仅保存于本机（Android SharedPreferences / macOS `java.util.prefs`）。
 
 ## 构建
 
-**Android APK**
+**Android APK**（arm64-v8a）
 
 ```bash
 ./gradlew :composeApp:assembleDebug
-# APK: composeApp/build/outputs/apk/debug/composeApp-debug.apk
+# APK: composeApp/build/outputs/apk/debug/composeApp-arm64-v8a-debug.apk
 ```
 
-**macOS (本地运行)**
+**macOS 本地运行**（Apple Silicon）
 
 ```bash
 ./gradlew :composeApp:run
@@ -67,6 +68,13 @@
 ./gradlew :composeApp:packageDmg     # 产物 composeApp/build/compose/binaries/main/dmg/
 ./gradlew :composeApp:packagePkg
 ```
+
+## CI
+
+`.github/workflows/ci.yml` 在 push 到 `main` 与任意 PR 时触发：
+
+- `android` job：`ubuntu-latest` → assembleDebug，产出 arm64-v8a APK artifact
+- `macos` job：`macos-14`（Apple Silicon）→ packageDmg，产出 arm64 `.dmg` artifact
 
 ## 目录结构
 
