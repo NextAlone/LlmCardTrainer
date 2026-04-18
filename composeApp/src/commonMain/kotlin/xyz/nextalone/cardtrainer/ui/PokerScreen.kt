@@ -61,6 +61,7 @@ import xyz.nextalone.cardtrainer.engine.holdem.Action
 import xyz.nextalone.cardtrainer.engine.holdem.ActionPresets
 import xyz.nextalone.cardtrainer.engine.holdem.Card as PokerCard
 import xyz.nextalone.cardtrainer.engine.holdem.Equity
+import xyz.nextalone.cardtrainer.engine.holdem.Draws
 import xyz.nextalone.cardtrainer.engine.holdem.HandEvaluator
 import xyz.nextalone.cardtrainer.engine.holdem.HoldemTable
 import xyz.nextalone.cardtrainer.engine.holdem.HoldemTrainer
@@ -436,6 +437,11 @@ private fun SubmittedBlock(
                     val cat = HandEvaluator.evaluate(table.hero + table.board).category
                     val prefix = if (table.street == Street.RIVER) "最终牌型" else "当前最佳"
                     add("$prefix: ${cat.displayName}")
+                }
+                if (table.board.size in 3..4) {
+                    val drawTags = Draws.detect(table.hero, table.board)
+                        .joinToString("+") { "${it.tag}(${it.outs})" }
+                    if (drawTags.isNotEmpty()) add("听: $drawTags")
                 }
             }
             if (parts.isNotEmpty()) {
