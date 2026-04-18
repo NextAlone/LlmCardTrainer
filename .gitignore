@@ -1,0 +1,20 @@
+.gradle/
+build/
+*/build/
+.idea/
+*.iml
+*.hprof
+local.properties
+.DS_Store
+.kotlin/
+
+# Android generated
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# Desktop packaging artifacts
+*.dmg
+*.pkg

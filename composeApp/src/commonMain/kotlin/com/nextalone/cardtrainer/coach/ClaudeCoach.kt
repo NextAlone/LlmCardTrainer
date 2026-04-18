@@ -1,0 +1,113 @@
+package com.nextalone.cardtrainer.coach
+
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+/**
+ * Minimal Claude Messages API client.
+ *
+ * Endpoint: https://api.anthropic.com/v1/messages
+ * Auth: x-api-key header (per-user key stored locally in Settings).
+ * Prompt caching: system prompt is marked `cache_control: ephemeral` so repeated
+ * coaching calls reuse the cached prefix at ~10% of input cost.
+ */
+class ClaudeCoach(
+    private val apiKey: String,
+    private val model: String = DEFAULT_MODEL,
+) {
+    companion object {
+        const val DEFAULT_MODEL = "claude-sonnet-4-6"
+        const val ENDPOINT = "https://api.anthropic.com/v1/messages"
+        const val API_VERSION = "2023-06-01"
+    }
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = false
+    }
+
+    private val client = HttpClient {
+        install(ContentNegotiation) { json(json) }
+    }
+
+    suspend fun coach(
+        systemPrompt: String,
+        userPrompt: String,
+        maxTokens: Int = 600,
+    ): String {
+        val request = MessageRequest(
+            model = model,
+            maxTokens = maxTokens,
+            system = listOf(
+                SystemBlock(text = systemPrompt, cacheControl = CacheControl("ephemeral")),
+            ),
+            messages = listOf(
+                Message(role = "user", content = userPrompt),
+            ),
+        )
+        val resp: MessageResponse = client.post(ENDPOINT) {
+            header("x-api-key", apiKey)
+            header("anthropic-version", API_VERSION)
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.body()
+        return resp.content.joinToString("\n") { it.text.orEmpty() }
+    }
+
+    fun close() = client.close()
+}
+
+@Serializable
+private data class MessageRequest(
+    val model: String,
+    @SerialName("max_tokens") val maxTokens: Int,
+    val system: List<SystemBlock>,
+    val messages: List<Message>,
+)
+
+@Serializable
+private data class SystemBlock(
+    val type: String = "text",
+    val text: String,
+    @SerialName("cache_control") val cacheControl: CacheControl? = null,
+)
+
+@Serializable
+private data class CacheControl(val type: String)
+
+@Serializable
+private data class Message(val role: String, val content: String)
+
+@Serializable
+private data class MessageResponse(
+    val id: String? = null,
+    val role: String? = null,
+    val model: String? = null,
+    val content: List<ContentBlock> = emptyList(),
+    @SerialName("stop_reason") val stopReason: String? = null,
+    val usage: Usage? = null,
+)
+
+@Serializable
+private data class ContentBlock(
+    val type: String,
+    val text: String? = null,
+)
+
+@Serializable
+private data class Usage(
+    @SerialName("input_tokens") val inputTokens: Int = 0,
+    @SerialName("output_tokens") val outputTokens: Int = 0,
+    @SerialName("cache_creation_input_tokens") val cacheCreation: Int = 0,
+    @SerialName("cache_read_input_tokens") val cacheRead: Int = 0,
+)
