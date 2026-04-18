@@ -108,6 +108,20 @@ private fun legacyErrorOrNull(legacy: String?, turns: List<ChatTurn>): String? {
     return legacy?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX)
 }
 
+private fun latestAssistant(turns: List<ChatTurn>): String? =
+    turns.lastOrNull { it.role == ChatTurn.Role.ASSISTANT }?.content?.takeIf { it.isNotBlank() }
+
+/**
+ * Append the *other* coach card's latest reply as cross-reference context so
+ * follow-up questions can explicitly reconcile disagreements between the two
+ * viewpoints. Truncated to keep prompt size bounded on long conversations.
+ */
+private fun systemWithCross(base: String, crossLabel: String, crossContent: String?): String {
+    if (crossContent.isNullOrBlank()) return base
+    val snippet = crossContent.take(1500)
+    return base + "\n\n【$crossLabel（仅供对照，可在回答中调和差异）】\n$snippet"
+}
+
 @Composable
 fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     val trainer = remember { HoldemTrainer() }
@@ -207,6 +221,9 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     }
 
     // Follow-up on the situation analysis — appends the question + reply.
+    // The system prompt is augmented with the evaluation card's latest
+    // assistant turn (if any) as a cross-reference so the model can
+    // explicitly reconcile when the two cards disagree.
     suspend fun followUpSituation(question: String) {
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
@@ -219,7 +236,14 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         val coach = LlmProviders.create(cfg)
         try {
             val reply = withRetry {
-                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = priorTurns)
+                coach.coach(
+                    systemPrompt = systemWithCross(
+                        Prompts.HOLDEM_SYSTEM,
+                        crossLabel = "另一位教练对用户决策的评价",
+                        crossContent = latestAssistant(evaluationTurns),
+                    ),
+                    messages = priorTurns,
+                )
             }
             situationTurns = priorTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
         } catch (t: Throwable) {
@@ -311,7 +335,14 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         val coach = LlmProviders.create(cfg)
         try {
             val reply = withRetry {
-                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = priorTurns)
+                coach.coach(
+                    systemPrompt = systemWithCross(
+                        Prompts.HOLDEM_SYSTEM,
+                        crossLabel = "另一位教练的独立视角分析",
+                        crossContent = latestAssistant(situationTurns),
+                    ),
+                    messages = priorTurns,
+                )
             }
             evaluationTurns = priorTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
         } catch (t: Throwable) {
