@@ -38,16 +38,30 @@ object HandCheck {
         waitingTiles(hand, missing).isNotEmpty()
 
     /**
-     * 向听数 (shanten): 0 = 听牌, 1 = 一向听, ... -1 indicates already winning.
-     * Simple upper bound based on standard form only.
+     * 向听数 (shanten) — standard mahjong convention:
+     *  - For a 14-tile hand: -1 = already winning, 0 = one discard from tenpai,
+     *    1 = two discards away, ...
+     *  - For a 13-tile hand: 0 = tenpai (one correct draw wins), 1 = ichishanten, ...
+     *
+     * Implementation: brute-force swap search with a small depth cap. A "swap" means
+     * replacing one tile in the hand with a legal tile (respecting 缺 and ≤4 copies).
+     * Because swaps preserve hand size, we model:
+     *  - 14-tile input: success = isWinning(counts).
+     *  - 13-tile input: success = waitingTiles non-empty (equivalent to: ∃ legal draw
+     *    t such that hand+t is winning).
+     *
+     * Depth cap = 4 to keep interactive latency low; returns 4 when further away.
      */
     fun shanten(hand: List<Tile>, missing: Suit? = null): Int {
         if (isWinning(hand, missing)) return -1
-        // Brute-force: try every pair of tiles to discard and draw combinations.
-        // For a 14- or 13-tile hand this is O(27) per depth so keep to depth 4.
+        if (hand.size == 13) {
+            // Shortcut: tenpai check before launching expensive search.
+            if (isTing(hand, missing)) return 0
+        }
         val maxDepth = 4
         val handCounts = toCounts(hand)
-        return searchShanten(handCounts, missing, 0, maxDepth) ?: maxDepth
+        val isThirteen = hand.size == 13
+        return searchShanten(handCounts, missing, 0, maxDepth, isThirteen) ?: maxDepth
     }
 
     private fun searchShanten(
@@ -55,11 +69,16 @@ object HandCheck {
         missing: Suit?,
         depth: Int,
         maxDepth: Int,
+        thirteenMode: Boolean,
     ): Int? {
-        if (isSevenPairs(counts) || isStandardHu(counts)) return depth - 1
+        val hasMissingTile = missing != null && (0 until 9).any { counts[missing.ordinal * 9 + it] > 0 }
+        val solved = !hasMissingTile && (
+            if (thirteenMode) isTenpaiFromCounts(counts, missing)
+            else isSevenPairs(counts) || isStandardHu(counts)
+        )
+        if (solved) return if (thirteenMode) depth else depth - 1
         if (depth == maxDepth) return null
         var best: Int? = null
-        // Try swapping one tile at a time (remove one we have, add any valid one).
         for (i in counts.indices) {
             if (counts[i] == 0) continue
             counts[i]--
@@ -68,13 +87,27 @@ object HandCheck {
                 val jSuit = indexSuit(j)
                 if (missing != null && jSuit == missing) continue
                 counts[j]++
-                val r = searchShanten(counts, missing, depth + 1, maxDepth)
+                val r = searchShanten(counts, missing, depth + 1, maxDepth, thirteenMode)
                 counts[j]--
                 if (r != null && (best == null || r < best)) best = r
             }
             counts[i]++
         }
         return best
+    }
+
+    /** Check if the 13-tile state encoded in [counts] is tenpai. */
+    private fun isTenpaiFromCounts(counts: IntArray, missing: Suit?): Boolean {
+        for (i in counts.indices) {
+            if (counts[i] >= 4) continue
+            val iSuit = indexSuit(i)
+            if (missing != null && iSuit == missing) continue
+            counts[i]++
+            val ok = isSevenPairs(counts) || isStandardHu(counts)
+            counts[i]--
+            if (ok) return true
+        }
+        return false
     }
 
     private fun isSevenPairs(counts: IntArray): Boolean {

@@ -33,19 +33,27 @@ data class HoldemTable(
     val potOdds: Double get() = if (toCall <= 0) 0.0 else toCall.toDouble() / (pot + toCall)
 }
 
-class HoldemTrainer(seed: Long? = null) {
+class HoldemTrainer(private val baseSeed: Long? = null) {
 
-    private val deck = Deck(seed)
+    // A fresh, shuffled deck per hand so long trainer sessions never exhaust it.
+    private var handCounter: Long = 0
+    private var deck: Deck = Deck(baseSeed)
 
     fun newHand(opponents: Int = 1, heroPosition: Position = randomPosition()): HoldemTable {
+        handCounter++
+        deck = Deck(baseSeed?.let { it + handCounter })
         val hero = deck.dealN(2)
         return HoldemTable(
             heroPosition = heroPosition,
             opponents = opponents,
             heroStack = 100,
             villainStack = 100,
-            pot = if (heroPosition == Position.SB) 3 else 3,
-            toCall = if (heroPosition == Position.SB) 1 else if (heroPosition == Position.BB) 0 else 2,
+            pot = 3,
+            toCall = when (heroPosition) {
+                Position.SB -> 1
+                Position.BB -> 0
+                else -> 2
+            },
             street = Street.PREFLOP,
             hero = hero,
             board = emptyList(),

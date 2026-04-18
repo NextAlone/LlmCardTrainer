@@ -52,6 +52,7 @@ kotlin {
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.androidx.core.ktx)
                 implementation(libs.androidx.lifecycle.runtime.ktx)
+                implementation(libs.androidx.security.crypto)
                 implementation(libs.kotlinx.coroutines.android)
                 implementation(libs.ktor.client.okhttp)
             }
@@ -129,11 +130,14 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Pkg)
             packageName = "LlmCardTrainer"
-            packageVersion = "0.1.0"
+            // jpackage requires MAJOR >= 1 for macOS Dmg/Pkg build versions.
+            packageVersion = "1.0.0"
 
             macOS {
                 bundleID = "com.nextalone.cardtrainer"
                 minimumSystemVersion = "11.0"
+                dmgPackageVersion = "1.0.0"
+                pkgPackageVersion = "1.0.0"
             }
         }
     }
