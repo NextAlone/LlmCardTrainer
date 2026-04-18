@@ -158,20 +158,52 @@ class HoldemTrainer(private val baseSeed: Long? = null) {
 data class ActionPreset(val action: Action, val amount: Int, val label: String)
 
 object ActionPresets {
-    /** Build preset buttons appropriate for the current table state. */
+    /**
+     * Build preset buttons appropriate for the current table state.
+     *
+     * Sizing conventions:
+     *  - **Preflop with no raise to face** (open / iso): in BB units
+     *    (2.5bb / 3bb / 4bb / 5bb) — matches how players think pre-flop.
+     *  - **Post-flop with no bet to face**: in pot fractions
+     *    (⅓ / ½ / ⅔ / pot / 1.5× / 2× overbet).
+     *  - **Facing a bet/raise**: raise sizes 2× / 2.5× / 3× the call amount
+     *    plus a pot-sized raise.
+     *  - All-in is always available as the last option.
+     *
+     * Callers can also pass a custom amount through the DecidingBlock's
+     * 自定义 input; presets are a discoverability convenience, not the
+     * only way to submit.
+     */
     fun forTable(table: HoldemTable): List<ActionPreset> = buildList {
         val pot = table.pot
         val toCall = table.toCall
         val stack = table.heroStack
+        val isPreflop = table.board.isEmpty()
+
         if (toCall == 0) {
             add(ActionPreset(Action.CHECK, 0, "过牌"))
-            add(ActionPreset(Action.BET, (pot / 2).coerceAtLeast(1), "下注 ½ 底池"))
-            add(ActionPreset(Action.BET, pot.coerceAtLeast(1), "下注 1 底池"))
+            if (isPreflop) {
+                // BB = 2 chips in this simplified table.
+                add(ActionPreset(Action.BET, 5.coerceAtMost(stack), "加注 2.5bb"))
+                add(ActionPreset(Action.BET, 6.coerceAtMost(stack), "加注 3bb"))
+                add(ActionPreset(Action.BET, 8.coerceAtMost(stack), "加注 4bb"))
+                add(ActionPreset(Action.BET, 10.coerceAtMost(stack), "加注 5bb"))
+            } else {
+                add(ActionPreset(Action.BET, (pot / 3).coerceAtLeast(1), "下注 ⅓ 底池"))
+                add(ActionPreset(Action.BET, (pot / 2).coerceAtLeast(1), "下注 ½ 底池"))
+                add(ActionPreset(Action.BET, (pot * 2 / 3).coerceAtLeast(1), "下注 ⅔ 底池"))
+                add(ActionPreset(Action.BET, pot.coerceAtLeast(1), "下注 1 底池"))
+                add(ActionPreset(Action.BET, (pot * 3 / 2).coerceAtLeast(1), "下注 1.5 底池"))
+                add(ActionPreset(Action.BET, (pot * 2).coerceAtLeast(1), "下注 2 底池 (overbet)"))
+            }
         } else {
             add(ActionPreset(Action.FOLD, 0, "弃牌"))
             add(ActionPreset(Action.CALL, toCall, "跟注 $toCall"))
-            add(ActionPreset(Action.RAISE, (toCall * 3).coerceAtMost(stack), "加注 3x"))
-            add(ActionPreset(Action.RAISE, ((pot + toCall) + toCall).coerceAtMost(stack), "加注 pot"))
+            val minLegalRaise = toCall + 1
+            add(ActionPreset(Action.RAISE, (toCall * 2).coerceAtLeast(minLegalRaise).coerceAtMost(stack), "加注 2x"))
+            add(ActionPreset(Action.RAISE, ((toCall * 5 + 1) / 2).coerceAtLeast(minLegalRaise).coerceAtMost(stack), "加注 2.5x"))
+            add(ActionPreset(Action.RAISE, (toCall * 3).coerceAtLeast(minLegalRaise).coerceAtMost(stack), "加注 3x"))
+            add(ActionPreset(Action.RAISE, ((pot + toCall) + toCall).coerceAtLeast(minLegalRaise).coerceAtMost(stack), "加注 pot"))
         }
         if (stack > 0) add(ActionPreset(Action.ALL_IN, stack, "全下 $stack"))
     }

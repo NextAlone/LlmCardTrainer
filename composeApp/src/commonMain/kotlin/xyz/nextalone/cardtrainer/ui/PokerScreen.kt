@@ -483,7 +483,9 @@ private fun DecidingBlock(
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    val presets = remember(table.pot, table.toCall, table.heroStack) { ActionPresets.forTable(table) }
+    val presets = remember(table.pot, table.toCall, table.heroStack, table.board) {
+        ActionPresets.forTable(table)
+    }
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -497,6 +499,47 @@ private fun DecidingBlock(
             )
         }
     }
+
+    // Custom amount: lets the user commit any size the presets don't cover —
+    // e.g. iso-raise 4.5bb preflop, or a 55% pot c-bet. The action defaults
+    // to BET when there's nothing to call and RAISE otherwise.
+    var customAmount by remember(table.pot, table.toCall, table.board) { mutableStateOf("") }
+    val customAction = if (table.toCall == 0) Action.BET else Action.RAISE
+    val customInt = customAmount.toIntOrNull()
+    val customValid = customInt != null &&
+        customInt > 0 &&
+        customInt <= table.heroStack &&
+        (table.toCall == 0 || customInt > table.toCall)
+    val isCustomChosen = userChoice?.first == customAction && customInt != null && userChoice.second == customInt
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        androidx.compose.material3.OutlinedTextField(
+            value = customAmount,
+            onValueChange = { new -> customAmount = new.filter { it.isDigit() }.take(5) },
+            label = {
+                Text(
+                    if (table.toCall == 0) "自定义下注 (chips)"
+                    else "自定义加注到 (chips)",
+                )
+            },
+            singleLine = true,
+            supportingText = {
+                val bbHint = customInt?.let { " ≈ ${it / 2.0}bb" } ?: ""
+                Text("筹码值${bbHint}")
+            },
+            modifier = Modifier.weight(1f),
+        )
+        FilterChip(
+            selected = isCustomChosen,
+            enabled = customValid,
+            onClick = { if (customValid) onChoose(customAction, customInt!!) },
+            label = { Text("选用") },
+        )
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
