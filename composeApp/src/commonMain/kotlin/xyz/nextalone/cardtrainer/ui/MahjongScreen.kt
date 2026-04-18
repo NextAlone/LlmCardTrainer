@@ -36,6 +36,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -102,6 +103,62 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
 
     LaunchedEffect(step, pendingQue, hand, advice) { persist() }
 
+    fun askCoach() {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            advice = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        loading = true
+        scope.launch {
+            val coach = LlmProviders.create(cfg)
+            try {
+                val suggestions = if (hand.size == 14) trainer.rankDiscards() else emptyList()
+                val liveWaits = UkeIre.waitingWithCounts(
+                    hand = if (hand.size == 14 && suggestions.isNotEmpty())
+                        hand.toMutableList().also { it.remove(suggestions.first().tile) }
+                    else hand,
+                    visible = trainer.discards.toList(),
+                    missing = trainer.missing,
+                )
+                val candidates = suggestions.map { it.tile }
+                val safety = Safety.rank(
+                    candidates = candidates.ifEmpty { hand },
+                    ownDiscards = trainer.discards.toList(),
+                    opponentDiscards = emptyList(),
+                )
+                val typeReport = if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, trainer.missing)) {
+                    HandType.classify(hand)
+                } else null
+                advice = coach.coach(
+                    systemPrompt = Prompts.MAHJONG_SYSTEM,
+                    userPrompt = Prompts.mahjongUser(
+                        hand = hand,
+                        missing = trainer.missing!!,
+                        discards = trainer.discards.toList(),
+                        suggestions = suggestions,
+                        wallRemaining = trainer.wallRemaining(),
+                        liveWaits = liveWaits,
+                        safety = safety,
+                        handType = typeReport,
+                    ),
+                )
+            } catch (t: Throwable) {
+                advice = "请求失败：${t.message}"
+            } finally {
+                coach.close()
+                loading = false
+            }
+        }
+    }
+
+    fun resetGame() {
+        trainer = SichuanTrainer()
+        hand = emptyList()
+        advice = null
+        step = MjStep.NOT_DEALT
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -117,6 +174,39 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                     }
                 },
             )
+        },
+        bottomBar = {
+            // Pin AI 分析 + 重新开局 once a hand is in play; they no longer scroll
+            // out of reach when the AI response is long.
+            if (step == MjStep.PLAYING) {
+                Surface(tonalElevation = 3.dp) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilledTonalButton(
+                            onClick = ::askCoach,
+                            enabled = !loading,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            if (loading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("思考中…")
+                            } else {
+                                Text("AI 教练分析")
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = ::resetGame,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("重新开局") }
+                    }
+                }
+            }
         },
     ) { padding ->
         Column(
@@ -147,10 +237,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                         Column(Modifier.padding(16.dp)) {
                             Text("已发 13 张手牌", fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.height(8.dp))
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) { hand.forEach { TileView(it) {} } }
+                            HandBySuit(hand = hand, onDiscard = {})
                         }
                     }
                     val advisories = remember(hand) { DingQue.recommend(hand) }
@@ -198,66 +285,11 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                     hand = hand,
                     missing = trainer.missing!!,
                     advice = advice,
-                    loading = loading,
                     onDiscard = { tile ->
                         trainer.discard(tile)
                         if (trainer.wallRemaining() > 0) trainer.drawTile()
                         refreshHand()
                         advice = null
-                    },
-                    onAskCoach = {
-                        val cfg = settings.activeConfig()
-                        if (cfg.apiKey.isBlank()) {
-                            advice = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
-                            return@PlayingContent
-                        }
-                        loading = true
-                        scope.launch {
-                            val coach = LlmProviders.create(cfg)
-                            try {
-                                val suggestions = if (hand.size == 14) trainer.rankDiscards() else emptyList()
-                                val liveWaits = UkeIre.waitingWithCounts(
-                                    hand = if (hand.size == 14 && suggestions.isNotEmpty())
-                                        hand.toMutableList().also { it.remove(suggestions.first().tile) }
-                                    else hand,
-                                    visible = trainer.discards.toList(),
-                                    missing = trainer.missing,
-                                )
-                                val candidates = suggestions.map { it.tile }
-                                val safety = Safety.rank(
-                                    candidates = candidates.ifEmpty { hand },
-                                    ownDiscards = trainer.discards.toList(),
-                                    opponentDiscards = emptyList(),
-                                )
-                                val typeReport = if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, trainer.missing)) {
-                                    HandType.classify(hand)
-                                } else null
-                                advice = coach.coach(
-                                    systemPrompt = Prompts.MAHJONG_SYSTEM,
-                                    userPrompt = Prompts.mahjongUser(
-                                        hand = hand,
-                                        missing = trainer.missing!!,
-                                        discards = trainer.discards.toList(),
-                                        suggestions = suggestions,
-                                        wallRemaining = trainer.wallRemaining(),
-                                        liveWaits = liveWaits,
-                                        safety = safety,
-                                        handType = typeReport,
-                                    ),
-                                )
-                            } catch (t: Throwable) {
-                                advice = "请求失败：${t.message}"
-                            } finally {
-                                coach.close()
-                                loading = false
-                            }
-                        }
-                    },
-                    onReset = {
-                        trainer = SichuanTrainer()
-                        hand = emptyList()
-                        advice = null
-                        step = MjStep.NOT_DEALT
                     },
                 )
             }
@@ -275,10 +307,7 @@ private fun PlayingContent(
     hand: List<Tile>,
     missing: Suit,
     advice: String?,
-    loading: Boolean,
     onDiscard: (Tile) -> Unit,
-    onAskCoach: () -> Unit,
-    onReset: () -> Unit,
 ) {
     val shanten = remember(hand) { HandCheck.shanten(hand, missing) }
     val winning = remember(hand) { HandCheck.isWinning(hand, missing) }
@@ -295,6 +324,20 @@ private fun PlayingContent(
         if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, missing))
             HandType.classify(hand)
         else null
+    }
+
+    // One-time in-screen operation hint.
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+    ) {
+        Text(
+            "点击手牌中任意一张 = 打出这张，引擎会自动从牌墙再摸一张进手。\n" +
+                "目标：通过打 / 摸进张降低「向听数」直到听牌（0）→ 胡牌（-1）。\n" +
+                "需要策略时点底部「AI 教练分析」让 LLM 结合向听、进张、安全度给建议。",
+            modifier = Modifier.padding(14.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+        )
     }
 
     Card {
@@ -315,14 +358,16 @@ private fun PlayingContent(
                 Text("牌墙余 ${trainer.wallRemaining()}")
             }
             Spacer(Modifier.height(10.dp))
-            Text("手牌（点击以打出）", style = MaterialTheme.typography.labelMedium)
+            Text(
+                if (hand.size == 14) "手牌（点击打出 → 自动摸下一张）"
+                else "手牌（等待摸牌）",
+                style = MaterialTheme.typography.labelMedium,
+            )
             Spacer(Modifier.height(6.dp))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                hand.forEach { tile -> TileView(tile) { if (hand.size == 14) onDiscard(tile) } }
-            }
+            HandBySuit(
+                hand = hand,
+                onDiscard = { if (hand.size == 14) onDiscard(it) },
+            )
         }
     }
 
@@ -355,35 +400,46 @@ private fun PlayingContent(
         }
     }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilledTonalButton(
-            onClick = onAskCoach,
-            enabled = !loading,
-            modifier = Modifier.weight(1f),
-        ) {
-            if (loading) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                Text("思考中…")
-            } else {
-                Text("AI 教练分析")
-            }
-        }
-        OutlinedButton(onClick = onReset, modifier = Modifier.weight(1f)) { Text("重新开局") }
-    }
-
     advice?.let {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
         ) {
-            Text(
-                it,
-                modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            AiMarkdown(it)
+        }
+    }
+}
+
+/**
+ * Render the hand as three rows grouped by suit (万 / 条 / 筒) — far easier
+ * to scan than a single FlowRow when the hand has 13–14 tiles.
+ */
+@Composable
+private fun HandBySuit(hand: List<Tile>, onDiscard: (Tile) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Suit.entries.forEach { s ->
+            val rowTiles = hand.filter { it.suit == s }.sortedBy { it.number }
+            if (rowTiles.isEmpty()) return@forEach
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    s.cn,
+                    modifier = Modifier.width(22.dp),
+                    color = when (s) {
+                        Suit.WAN -> Color(0xFFB00020)
+                        Suit.TIAO -> Color(0xFF0E7C3A)
+                        Suit.TONG -> Color(0xFF1E5AA8)
+                    },
+                    fontWeight = FontWeight.SemiBold,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    rowTiles.forEach { tile -> TileView(tile) { onDiscard(tile) } }
+                }
+            }
         }
     }
 }
