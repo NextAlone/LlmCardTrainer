@@ -71,6 +71,9 @@ import kotlinx.coroutines.launch
 
 private typealias MjStep = MahjongSession.Step
 
+// Marker for failure strings saved by pre-retry builds into MahjongSession.advice.
+private const val ERROR_PREFIX = "请求失败："
+
 @Composable
 fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     // Restore prior session if any.
@@ -83,8 +86,12 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     var step by remember { mutableStateOf(savedSession?.step ?: MjStep.NOT_DEALT) }
     var pendingQue by remember { mutableStateOf(savedSession?.pendingQue ?: Suit.WAN) }
     var hand by remember { mutableStateOf(trainer.hand.toList()) }
-    var advice by remember { mutableStateOf(savedSession?.advice) }
-    var adviceError by remember { mutableStateOf<String?>(null) }
+    // Pre-retry builds saved failure messages straight into `advice`; shunt
+    // them into adviceError at load time so the retry button appears.
+    var advice by remember { mutableStateOf(savedSession?.advice?.takeUnless { it.startsWith(ERROR_PREFIX) }) }
+    var adviceError by remember {
+        mutableStateOf(savedSession?.advice?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX))
+    }
     var loading by remember { mutableStateOf(false) }
     var showGlossary by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
