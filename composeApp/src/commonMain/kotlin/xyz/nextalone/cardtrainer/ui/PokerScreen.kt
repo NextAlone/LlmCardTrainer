@@ -471,6 +471,46 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
 }
 
 @Composable
+@Composable
+private fun PreflopHistoryCard(table: HoldemTable) {
+    // Position order in a 6-max game, UTG first.
+    val order = listOf(
+        xyz.nextalone.cardtrainer.engine.holdem.Position.UTG,
+        xyz.nextalone.cardtrainer.engine.holdem.Position.MP,
+        xyz.nextalone.cardtrainer.engine.holdem.Position.CO,
+        xyz.nextalone.cardtrainer.engine.holdem.Position.BTN,
+        xyz.nextalone.cardtrainer.engine.holdem.Position.SB,
+        xyz.nextalone.cardtrainer.engine.holdem.Position.BB,
+    )
+    val seatsBeforeHero = order.takeWhile { it != table.heroPosition }
+    val summary = table.history.zip(seatsBeforeHero).joinToString("  ·  ") { (rec, seat) ->
+        when (rec.action) {
+            Action.FOLD -> "${seat.label} 弃"
+            Action.CALL -> if (rec.amount == 2) "${seat.label} 跛入" else "${seat.label} 跟 ${rec.amount}"
+            Action.RAISE -> "${seat.label} 加到 ${rec.amount} (${rec.amount / 2.0}bb)"
+            Action.BET -> "${seat.label} 下 ${rec.amount}"
+            Action.CHECK -> "${seat.label} 过"
+            Action.ALL_IN -> "${seat.label} 全下"
+        }
+    }
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("翻前动作（轮到你之前）", fontWeight = FontWeight.SemiBold)
+            Text(summary.ifBlank { "无人行动，直接轮到你" }, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "→ 现底池 ${table.pot}，你${if (table.toCall == 0) "可免费看牌 / 开池" else "需跟注 ${table.toCall}"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun DecidingBlock(
     table: HoldemTable,
     userChoice: Pair<Action, Int>?,
@@ -483,6 +523,14 @@ private fun DecidingBlock(
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+
+    // Preflop action history — shows the user what every seat BEFORE them
+    // did on this hand (fold / limp / open / cold-call / 3-bet), so the
+    // decision context is concrete instead of an abstract pot=3 / toCall=X.
+    if (table.street == Street.PREFLOP && table.history.isNotEmpty()) {
+        PreflopHistoryCard(table = table)
+    }
+
     val presets = remember(table.pot, table.toCall, table.heroStack, table.board) {
         ActionPresets.forTable(table)
     }

@@ -50,21 +50,21 @@ class HoldemTrainer(private val baseSeed: Long? = null) {
         handCounter++
         deck = Deck(baseSeed?.let { it + handCounter })
         val hero = deck.dealN(2)
+        val script = PreflopScript.generate(heroPosition)
+        // Count remaining live opponents from the script's fold/raise calls so
+        // the equity calculation knows how many non-hero hands to deal against.
+        val liveOpponents = script.livePlayers.coerceAtLeast(1)
         return HoldemTable(
             heroPosition = heroPosition,
-            opponents = opponents,
+            opponents = liveOpponents,
             heroStack = 100,
             villainStack = 100,
-            pot = 3,
-            toCall = when (heroPosition) {
-                Position.SB -> 1
-                Position.BB -> 0
-                else -> 2
-            },
+            pot = script.pot,
+            toCall = script.toCallForHero(heroPosition),
             street = Street.PREFLOP,
             hero = hero,
             board = emptyList(),
-            history = emptyList(),
+            history = script.records,
         )
     }
 
