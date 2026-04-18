@@ -26,18 +26,23 @@ interface LlmProvider {
      * assistant reply as plain text. Callers should append the returned
      * string to their own turn list as an ASSISTANT turn, then pass the
      * extended list back on the next follow-up call.
+     *
+     * Default max_tokens is generous (1500) because some reasoning models
+     * spend a large chunk of the budget inside `<think>` blocks before
+     * emitting the actual final answer. Too small a budget and the final
+     * answer gets truncated — the UI ends up showing a blank card.
      */
     suspend fun coach(
         systemPrompt: String,
         messages: List<ChatTurn>,
-        maxTokens: Int = 600,
+        maxTokens: Int = 1500,
     ): String
 
     /** Convenience: one-shot single-user-turn call. */
     suspend fun coach(
         systemPrompt: String,
         userPrompt: String,
-        maxTokens: Int = 600,
+        maxTokens: Int = 1500,
     ): String = coach(
         systemPrompt = systemPrompt,
         messages = listOf(ChatTurn(ChatTurn.Role.USER, userPrompt)),

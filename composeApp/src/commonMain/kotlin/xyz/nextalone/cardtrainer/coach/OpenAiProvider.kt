@@ -21,6 +21,11 @@ import kotlinx.serialization.json.Json
  * Base URL default: `https://api.openai.com/v1`; also works with any OpenAI-compatible
  * endpoint (DeepSeek, Moonshot, Together, OpenRouter, local vLLM/Ollama bridge, ...).
  * Endpoint called: POST {baseUrl}/chat/completions
+ *
+ * Response extraction prefers `choices[0].message.content`, but transparently
+ * falls back to `reasoning_content` / `thinking` — some reasoning endpoints
+ * (DeepSeek-R1-style proxies) put the usable text there when they don't emit
+ * a separate final-answer field.
  */
 class OpenAiProvider(
     private val apiKey: String,
@@ -54,10 +59,10 @@ class OpenAiProvider(
             model = model,
             maxTokens = maxTokens,
             messages = buildList {
-                add(ChatMessage(role = "system", content = systemPrompt))
+                add(RequestMessage(role = "system", content = systemPrompt))
                 messages.forEach {
                     add(
-                        ChatMessage(
+                        RequestMessage(
                             role = when (it.role) {
                                 ChatTurn.Role.USER -> "user"
                                 ChatTurn.Role.ASSISTANT -> "assistant"
@@ -73,8 +78,12 @@ class OpenAiProvider(
             contentType(ContentType.Application.Json)
             setBody(body)
         }.body()
-        val raw = resp.choices.firstOrNull()?.message?.content.orEmpty()
-        return ResponseCleanup.clean(raw)
+        val msg = resp.choices.firstOrNull()?.message
+        val raw = msg?.content?.takeUnless { it.isBlank() }
+            ?: msg?.reasoningContent?.takeUnless { it.isBlank() }
+            ?: msg?.thinking?.takeUnless { it.isBlank() }
+            ?: ""
+        return ResponseCleanup.cleanOrRaw(raw)
     }
 
     override fun close() = client.close()
@@ -83,13 +92,13 @@ class OpenAiProvider(
 @Serializable
 private data class ChatRequest(
     val model: String,
-    val messages: List<ChatMessage>,
+    val messages: List<RequestMessage>,
     @SerialName("max_tokens") val maxTokens: Int,
     val temperature: Double = 0.4,
 )
 
 @Serializable
-private data class ChatMessage(val role: String, val content: String)
+private data class RequestMessage(val role: String, val content: String)
 
 @Serializable
 private data class ChatResponse(
@@ -101,6 +110,14 @@ private data class ChatResponse(
 @Serializable
 private data class ChatChoice(
     val index: Int = 0,
-    val message: ChatMessage,
+    val message: ResponseMessage,
     @SerialName("finish_reason") val finishReason: String? = null,
+)
+
+@Serializable
+private data class ResponseMessage(
+    val role: String? = null,
+    val content: String? = null,
+    @SerialName("reasoning_content") val reasoningContent: String? = null,
+    val thinking: String? = null,
 )

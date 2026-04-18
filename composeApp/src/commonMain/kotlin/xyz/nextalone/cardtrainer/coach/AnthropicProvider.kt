@@ -72,7 +72,7 @@ class AnthropicProvider(
             setBody(request)
         }.body()
         val raw = resp.content.joinToString("\n") { it.text.orEmpty() }
-        return ResponseCleanup.clean(raw)
+        return ResponseCleanup.cleanOrRaw(raw)
     }
 
     override fun close() = client.close()

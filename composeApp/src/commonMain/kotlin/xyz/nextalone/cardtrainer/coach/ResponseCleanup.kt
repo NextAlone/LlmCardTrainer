@@ -29,4 +29,16 @@ object ResponseCleanup {
         s = THINK_UNCLOSED.replace(s, "")
         return s.trim()
     }
+
+    /**
+     * Prefer the cleaned text, but fall back to the raw output when the
+     * cleaner strips away everything (typical for a reasoning model that
+     * blew its maxTokens budget inside a `<think>` block and never reached
+     * the final answer). Users at least see SOMETHING — the raw
+     * reasoning — rather than an empty card with no hint.
+     */
+    fun cleanOrRaw(raw: String): String {
+        val cleaned = clean(raw)
+        return cleaned.ifEmpty { raw.trim() }
+    }
 }
