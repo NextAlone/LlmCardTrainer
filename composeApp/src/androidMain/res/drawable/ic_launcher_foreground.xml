@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive-icon foreground (108dp). Design:
+    - A white playing-card silhouette rotated slightly left.
+    - A red mahjong-tile silhouette overlapping, rotated slightly right.
+    - A black spade glyph on the card and a red dot pattern on the tile —
+      enough silhouette contrast to read at small sizes.
+  Safe zone is the center 72x72 (18..90); all glyphs stay inside.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Mahjong tile (ivory), behind the card, tilted right. -->
+    <group
+        android:pivotX="58"
+        android:pivotY="54"
+        android:rotation="10">
+        <path
+            android:fillColor="#FAF3E0"
+            android:pathData="M38,26 h40 a6,6 0 0 1 6,6 v44 a6,6 0 0 1 -6,6 h-40 a6,6 0 0 1 -6,-6 v-44 a6,6 0 0 1 6,-6 z" />
+        <!-- 1-筒 dot -->
+        <path
+            android:fillColor="#B00020"
+            android:pathData="M58,46 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M58,46 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+        <!-- shadow/stripe at bottom -->
+        <path
+            android:fillColor="#0E7C3A"
+            android:fillAlpha="0.18"
+            android:pathData="M38,68 h40 v4 h-40 z" />
+    </group>
+
+    <!-- Playing card (white) on top, tilted left. -->
+    <group
+        android:pivotX="50"
+        android:pivotY="56"
+        android:rotation="-12">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M28,30 h38 a6,6 0 0 1 6,6 v44 a6,6 0 0 1 -6,6 h-38 a6,6 0 0 1 -6,-6 v-44 a6,6 0 0 1 6,-6 z" />
+        <!-- "A" top-left -->
+        <path
+            android:fillColor="#111111"
+            android:pathData="M30,42 l4,-8 l4,8 M31,40 h6" />
+        <!-- Spade centered -->
+        <path
+            android:fillColor="#111111"
+            android:pathData="M47,50 C38,60 34,66 34,72 C34,77 38,80 42,80 C45,80 47,78 47,75 L47,78 L44,82 L54,82 L51,78 L51,75 C51,78 53,80 56,80 C60,80 64,77 64,72 C64,66 60,60 51,50 C50,49 48,49 47,50 Z" />
+    </group>
+</vector>

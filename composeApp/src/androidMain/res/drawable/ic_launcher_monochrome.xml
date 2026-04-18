@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Monochrome variant used by Android 13+ themed icons. Silhouettes only; the
+  system applies a single tint. We drop the tile/card distinction and draw a
+  stylised card outline containing a spade, which is the recognisable part at
+  themed-icon size.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Card outline, stroked. -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M34,24 h40 a8,8 0 0 1 8,8 v44 a8,8 0 0 1 -8,8 h-40 a8,8 0 0 1 -8,-8 v-44 a8,8 0 0 1 8,-8 z M34,30 a2,2 0 0 0 -2,2 v44 a2,2 0 0 0 2,2 h40 a2,2 0 0 0 2,-2 v-44 a2,2 0 0 0 -2,-2 z"
+        android:fillType="evenOdd" />
+    <!-- Spade silhouette centered. -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M52,40 C43,52 37,60 37,68 C37,74 42,78 47,78 C51,78 53,76 54,74 L54,78 L50,84 L64,84 L60,78 L60,74 C61,76 63,78 67,78 C72,78 77,74 77,68 C77,60 71,52 62,40 C60,37 54,37 52,40 Z" />
+</vector>
