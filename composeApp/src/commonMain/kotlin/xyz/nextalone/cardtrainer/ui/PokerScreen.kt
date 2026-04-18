@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -70,6 +71,7 @@ import xyz.nextalone.cardtrainer.storage.AppSettings
 import xyz.nextalone.cardtrainer.storage.PokerSession
 import xyz.nextalone.cardtrainer.storage.loadPokerSession
 import xyz.nextalone.cardtrainer.storage.savePokerSession
+import xyz.nextalone.cardtrainer.util.withRetry
 
 private typealias Phase = PokerSession.Phase
 
@@ -91,9 +93,11 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     var outs by remember { mutableStateOf<OutsReport?>(null) }
     // AI-provided situation analysis, pre-computed in background during DECIDING.
     var situationAnalysis by remember { mutableStateOf(initial.situationAnalysis) }
+    var situationError by remember { mutableStateOf<String?>(null) }
     var loadingSituation by remember { mutableStateOf(false) }
     // AI-provided choice evaluation, computed after submit.
     var choiceEvaluation by remember { mutableStateOf(initial.choiceEvaluation) }
+    var evaluationError by remember { mutableStateOf<String?>(null) }
     var loadingEvaluation by remember { mutableStateOf(false) }
 
     var userChoice by remember {
@@ -123,6 +127,39 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         )
     }
 
+    // Background situation-analysis: called on street change and retry.
+    suspend fun runSituationAnalysis() {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            situationError = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        loadingSituation = true
+        situationError = null
+        val coach = LlmProviders.create(cfg)
+        try {
+            val result = withRetry {
+                coach.coach(
+                    systemPrompt = Prompts.HOLDEM_SYSTEM,
+                    userPrompt = Prompts.holdemUser(
+                        table = table,
+                        equityPct = equityPct,
+                        preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline else null,
+                        outs = outs,
+                        userChoice = null,
+                    ),
+                )
+            }
+            situationAnalysis = result
+            situationError = null
+        } catch (t: Throwable) {
+            situationError = t.message ?: t::class.simpleName ?: "未知错误"
+        } finally {
+            coach.close()
+            loadingSituation = false
+        }
+    }
+
     // On every street change / new hand: recompute equity+outs off-main-thread,
     // and kick off a background situation-analysis AI call (hidden until submit).
     LaunchedEffect(table.street, table.hero, table.board) {
@@ -141,30 +178,7 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         // Skip the AI call if we already have analysis for this exact board
         // (e.g. after restoring a session). Avoids duplicate API billing.
         if (situationAnalysis != null) return@LaunchedEffect
-
-        val cfg = settings.activeConfig()
-        if (cfg.apiKey.isNotBlank()) {
-            loadingSituation = true
-            val coach = LlmProviders.create(cfg)
-            try {
-                situationAnalysis = coach.coach(
-                    systemPrompt = Prompts.HOLDEM_SYSTEM,
-                    userPrompt = Prompts.holdemUser(
-                        table = table,
-                        equityPct = equityPct,
-                        preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline else null,
-                        outs = outs,
-                        userChoice = null,
-                    ),
-                )
-            } catch (_: Throwable) {
-                // Silent fail in background; user will see a message on submit if the
-                // evaluation call also fails.
-            } finally {
-                coach.close()
-                loadingSituation = false
-            }
-        }
+        runSituationAnalysis()
     }
 
     fun startNewHand() {
@@ -172,25 +186,27 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         phase = Phase.DECIDING
         userChoice = null
         situationAnalysis = null
+        situationError = null
         choiceEvaluation = null
+        evaluationError = null
         equityPct = null
         outs = null
     }
 
-    fun submitDecision() {
+    suspend fun runEvaluation() {
         val choice = userChoice ?: return
-        phase = Phase.SUBMITTED
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
-            choiceEvaluation = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key 以获取 AI 评价。"
+            evaluationError = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
             return
         }
         loadingEvaluation = true
+        evaluationError = null
         choiceEvaluation = null
-        scope.launch {
-            val coach = LlmProviders.create(cfg)
-            try {
-                choiceEvaluation = coach.coach(
+        val coach = LlmProviders.create(cfg)
+        try {
+            val result = withRetry {
+                coach.coach(
                     systemPrompt = Prompts.HOLDEM_SYSTEM,
                     userPrompt = Prompts.holdemUser(
                         table = table,
@@ -200,13 +216,21 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                         userChoice = choice,
                     ),
                 )
-            } catch (t: Throwable) {
-                choiceEvaluation = "请求失败：${t.message}"
-            } finally {
-                coach.close()
-                loadingEvaluation = false
             }
+            choiceEvaluation = result
+            evaluationError = null
+        } catch (t: Throwable) {
+            evaluationError = t.message ?: t::class.simpleName ?: "未知错误"
+        } finally {
+            coach.close()
+            loadingEvaluation = false
         }
+    }
+
+    fun submitDecision() {
+        userChoice ?: return
+        phase = Phase.SUBMITTED
+        scope.launch { runEvaluation() }
     }
 
     Scaffold(
@@ -242,7 +266,9 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                                     phase = Phase.DECIDING
                                     userChoice = null
                                     choiceEvaluation = null
+                                    evaluationError = null
                                     situationAnalysis = null
+                                    situationError = null
                                 },
                                 modifier = Modifier.weight(1f),
                             ) { Text("发下一街") }
@@ -294,8 +320,13 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     outs = outs,
                     preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline.toString() else null,
                     situationAnalysis = situationAnalysis,
+                    situationError = situationError,
+                    loadingSituation = loadingSituation,
+                    onRetrySituation = { scope.launch { runSituationAnalysis() } },
                     choiceEvaluation = choiceEvaluation,
+                    evaluationError = evaluationError,
                     loadingEvaluation = loadingEvaluation,
+                    onRetryEvaluation = { scope.launch { runEvaluation() } },
                 )
             }
         }
@@ -357,8 +388,13 @@ private fun SubmittedBlock(
     outs: OutsReport?,
     preflopBaseline: String?,
     situationAnalysis: String?,
+    situationError: String?,
+    loadingSituation: Boolean,
+    onRetrySituation: () -> Unit,
     choiceEvaluation: String?,
+    evaluationError: String?,
     loadingEvaluation: Boolean,
+    onRetryEvaluation: () -> Unit,
 ) {
     userChoice?.let { (a, amt) ->
         val tag = if (amt > 0) " $amt" else ""
@@ -392,7 +428,7 @@ private fun SubmittedBlock(
         }
     }
 
-    if (situationAnalysis != null) {
+    if (situationAnalysis != null || situationError != null || loadingSituation) {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
         ) {
@@ -402,7 +438,21 @@ private fun SubmittedBlock(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onTertiaryContainer,
                 )
-                AiMarkdown(situationAnalysis)
+                when {
+                    loadingSituation -> Row(
+                        Modifier.padding(top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("分析中…（自动重试）")
+                    }
+                    situationAnalysis != null -> AiMarkdown(situationAnalysis)
+                    situationError != null -> ErrorWithRetry(
+                        message = situationError,
+                        onRetry = onRetrySituation,
+                    )
+                }
             }
         }
     }
@@ -419,20 +469,42 @@ private fun SubmittedBlock(
             Spacer(Modifier.height(6.dp))
             when {
                 loadingEvaluation -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                    )
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("AI 评价生成中…")
+                    Text("AI 评价生成中…（自动重试）")
                 }
                 choiceEvaluation != null -> AiMarkdown(choiceEvaluation)
+                evaluationError != null -> ErrorWithRetry(
+                    message = evaluationError,
+                    onRetry = onRetryEvaluation,
+                )
                 else -> Text(
                     "（暂无，请检查 API Key / 网络）",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+/** Reusable error row: message + manual retry affordance. */
+@Composable
+private fun ErrorWithRetry(message: String, onRetry: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "请求失败：$message",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        FilledTonalButton(onClick = onRetry) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("重试")
         }
     }
 }
