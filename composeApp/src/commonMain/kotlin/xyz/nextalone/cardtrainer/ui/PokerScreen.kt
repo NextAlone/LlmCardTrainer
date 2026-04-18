@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import xyz.nextalone.cardtrainer.coach.ChatTurn
 import xyz.nextalone.cardtrainer.coach.LlmProviders
 import xyz.nextalone.cardtrainer.coach.Prompts
 import xyz.nextalone.cardtrainer.engine.holdem.Action
@@ -82,6 +83,31 @@ private typealias Phase = PokerSession.Phase
 // strings into the new error-state slots at session-load time.
 private const val ERROR_PREFIX = "请求失败："
 
+/**
+ * If the session has no turn list but does have a legacy success string,
+ * synthesise an assistant-only turn so the old analysis stays visible. If
+ * the legacy string was an error, we drop it (error goes to [legacyErrorOrNull]).
+ */
+private fun migrateLegacyTurns(
+    turns: List<ChatTurn>,
+    legacy: String?,
+): List<ChatTurn> {
+    if (turns.isNotEmpty()) return turns
+    val clean = legacy?.takeUnless { it.startsWith(ERROR_PREFIX) } ?: return emptyList()
+    // Synthetic initial-prompt placeholder so follow-up still has an index-0
+    // hidden slot; the actual text is inconsequential, model will rely on the
+    // system prompt + assistant reply for context.
+    return listOf(
+        ChatTurn(ChatTurn.Role.USER, "（初始分析请求）"),
+        ChatTurn(ChatTurn.Role.ASSISTANT, clean),
+    )
+}
+
+private fun legacyErrorOrNull(legacy: String?, turns: List<ChatTurn>): String? {
+    if (turns.isNotEmpty()) return null
+    return legacy?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX)
+}
+
 @Composable
 fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     val trainer = remember { HoldemTrainer() }
@@ -98,16 +124,23 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     // Algorithmic analysis — only revealed after submit.
     var equityPct by remember { mutableStateOf<Double?>(null) }
     var outs by remember { mutableStateOf<OutsReport?>(null) }
-    // AI-provided situation analysis, pre-computed in background during DECIDING.
-    // Pre-retry builds stored error strings directly in *Analysis/*Evaluation;
-    // partition those out to the error field at load time so the retry button
-    // appears for legacy sessions.
-    var situationAnalysis by remember { mutableStateOf(initial.situationAnalysis?.takeUnless { it.startsWith(ERROR_PREFIX) }) }
-    var situationError by remember { mutableStateOf(initial.situationAnalysis?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX)) }
+    // Multi-turn AI conversation state. Each is a list of ChatTurn: index 0
+    // is always the structured initial user prompt (hidden from the UI); index
+    // 1 is the first assistant reply; further indices alternate user follow-ups
+    // and assistant replies.
+    var situationTurns by remember {
+        mutableStateOf(migrateLegacyTurns(initial.situationTurns, initial.situationAnalysis))
+    }
+    var situationError by remember {
+        mutableStateOf(legacyErrorOrNull(initial.situationAnalysis, initial.situationTurns))
+    }
     var loadingSituation by remember { mutableStateOf(false) }
-    // AI-provided choice evaluation, computed after submit.
-    var choiceEvaluation by remember { mutableStateOf(initial.choiceEvaluation?.takeUnless { it.startsWith(ERROR_PREFIX) }) }
-    var evaluationError by remember { mutableStateOf(initial.choiceEvaluation?.takeIf { it.startsWith(ERROR_PREFIX) }?.removePrefix(ERROR_PREFIX)) }
+    var evaluationTurns by remember {
+        mutableStateOf(migrateLegacyTurns(initial.evaluationTurns, initial.choiceEvaluation))
+    }
+    var evaluationError by remember {
+        mutableStateOf(legacyErrorOrNull(initial.choiceEvaluation, initial.evaluationTurns))
+    }
     var loadingEvaluation by remember { mutableStateOf(false) }
 
     var userChoice by remember {
@@ -124,15 +157,15 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
 
     // Persist the session on every meaningful state change so relaunching the
     // app resumes exactly where the user left off.
-    LaunchedEffect(table, phase, userChoice, situationAnalysis, choiceEvaluation) {
+    LaunchedEffect(table, phase, userChoice, situationTurns, evaluationTurns) {
         settings.savePokerSession(
             PokerSession(
                 table = table,
                 phase = phase,
                 userChoiceAction = userChoice?.first,
                 userChoiceAmount = userChoice?.second,
-                situationAnalysis = situationAnalysis,
-                choiceEvaluation = choiceEvaluation,
+                situationTurns = situationTurns,
+                evaluationTurns = evaluationTurns,
             ),
         )
     }
@@ -146,22 +179,49 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         }
         loadingSituation = true
         situationError = null
+        val initialPrompt = Prompts.holdemUser(
+            table = table,
+            equityPct = equityPct,
+            preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline else null,
+            outs = outs,
+            madeHand = if (table.board.size >= 3)
+                HandEvaluator.evaluate(table.hero + table.board).category
+            else null,
+            draws = if (table.board.size in 3..4) Draws.detect(table.hero, table.board) else emptyList(),
+            userChoice = null,
+        )
+        val seedTurns = listOf(ChatTurn(ChatTurn.Role.USER, initialPrompt))
         val coach = LlmProviders.create(cfg)
         try {
-            val result = withRetry {
-                coach.coach(
-                    systemPrompt = Prompts.HOLDEM_SYSTEM,
-                    userPrompt = Prompts.holdemUser(
-                        table = table,
-                        equityPct = equityPct,
-                        preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline else null,
-                        outs = outs,
-                        userChoice = null,
-                    ),
-                )
+            val reply = withRetry {
+                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seedTurns)
             }
-            situationAnalysis = result
+            situationTurns = seedTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
             situationError = null
+        } catch (t: Throwable) {
+            situationError = t.message ?: t::class.simpleName ?: "未知错误"
+        } finally {
+            coach.close()
+            loadingSituation = false
+        }
+    }
+
+    // Follow-up on the situation analysis — appends the question + reply.
+    suspend fun followUpSituation(question: String) {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            situationError = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        val priorTurns = situationTurns + ChatTurn(ChatTurn.Role.USER, question)
+        loadingSituation = true
+        situationError = null
+        val coach = LlmProviders.create(cfg)
+        try {
+            val reply = withRetry {
+                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = priorTurns)
+            }
+            situationTurns = priorTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
         } catch (t: Throwable) {
             situationError = t.message ?: t::class.simpleName ?: "未知错误"
         } finally {
@@ -185,9 +245,9 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
             withContext(Dispatchers.Default) { Outs.count(table.hero, table.board) }
         } else null
 
-        // Skip the AI call if we already have analysis for this exact board
-        // (e.g. after restoring a session). Avoids duplicate API billing.
-        if (situationAnalysis != null) return@LaunchedEffect
+        // Skip the AI call if we already have a conversation for this exact
+        // board (e.g. after restoring a session). Avoids duplicate billing.
+        if (situationTurns.isNotEmpty()) return@LaunchedEffect
         runSituationAnalysis()
     }
 
@@ -195,9 +255,9 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         table = trainer.newHand()
         phase = Phase.DECIDING
         userChoice = null
-        situationAnalysis = null
+        situationTurns = emptyList()
         situationError = null
-        choiceEvaluation = null
+        evaluationTurns = emptyList()
         evaluationError = null
         equityPct = null
         outs = null
@@ -212,23 +272,48 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         }
         loadingEvaluation = true
         evaluationError = null
-        choiceEvaluation = null
+        val initialPrompt = Prompts.holdemUser(
+            table = table,
+            equityPct = equityPct,
+            preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline else null,
+            outs = outs,
+            madeHand = if (table.board.size >= 3)
+                HandEvaluator.evaluate(table.hero + table.board).category
+            else null,
+            draws = if (table.board.size in 3..4) Draws.detect(table.hero, table.board) else emptyList(),
+            userChoice = choice,
+        )
+        val seedTurns = listOf(ChatTurn(ChatTurn.Role.USER, initialPrompt))
         val coach = LlmProviders.create(cfg)
         try {
-            val result = withRetry {
-                coach.coach(
-                    systemPrompt = Prompts.HOLDEM_SYSTEM,
-                    userPrompt = Prompts.holdemUser(
-                        table = table,
-                        equityPct = equityPct,
-                        preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline else null,
-                        outs = outs,
-                        userChoice = choice,
-                    ),
-                )
+            val reply = withRetry {
+                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seedTurns)
             }
-            choiceEvaluation = result
+            evaluationTurns = seedTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
             evaluationError = null
+        } catch (t: Throwable) {
+            evaluationError = t.message ?: t::class.simpleName ?: "未知错误"
+        } finally {
+            coach.close()
+            loadingEvaluation = false
+        }
+    }
+
+    suspend fun followUpEvaluation(question: String) {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            evaluationError = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        val priorTurns = evaluationTurns + ChatTurn(ChatTurn.Role.USER, question)
+        loadingEvaluation = true
+        evaluationError = null
+        val coach = LlmProviders.create(cfg)
+        try {
+            val reply = withRetry {
+                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = priorTurns)
+            }
+            evaluationTurns = priorTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
         } catch (t: Throwable) {
             evaluationError = t.message ?: t::class.simpleName ?: "未知错误"
         } finally {
@@ -280,9 +365,9 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                                     table = trainer.advanceStreet(table)
                                     phase = Phase.DECIDING
                                     userChoice = null
-                                    choiceEvaluation = null
+                                    evaluationTurns = emptyList()
                                     evaluationError = null
-                                    situationAnalysis = null
+                                    situationTurns = emptyList()
                                     situationError = null
                                 },
                                 modifier = Modifier.weight(1f),
@@ -334,14 +419,16 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     equityPct = equityPct,
                     outs = outs,
                     preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline.toString() else null,
-                    situationAnalysis = situationAnalysis,
+                    situationTurns = situationTurns,
                     situationError = situationError,
                     loadingSituation = loadingSituation,
                     onRetrySituation = { scope.launch { runSituationAnalysis() } },
-                    choiceEvaluation = choiceEvaluation,
+                    onFollowUpSituation = { q -> scope.launch { followUpSituation(q) } },
+                    evaluationTurns = evaluationTurns,
                     evaluationError = evaluationError,
                     loadingEvaluation = loadingEvaluation,
                     onRetryEvaluation = { scope.launch { runEvaluation() } },
+                    onFollowUpEvaluation = { q -> scope.launch { followUpEvaluation(q) } },
                 )
             }
         }
@@ -402,14 +489,16 @@ private fun SubmittedBlock(
     equityPct: Double?,
     outs: OutsReport?,
     preflopBaseline: String?,
-    situationAnalysis: String?,
+    situationTurns: List<ChatTurn>,
     situationError: String?,
     loadingSituation: Boolean,
     onRetrySituation: () -> Unit,
-    choiceEvaluation: String?,
+    onFollowUpSituation: (String) -> Unit,
+    evaluationTurns: List<ChatTurn>,
     evaluationError: String?,
     loadingEvaluation: Boolean,
     onRetryEvaluation: () -> Unit,
+    onFollowUpEvaluation: (String) -> Unit,
 ) {
     userChoice?.let { (a, amt) ->
         val tag = if (amt > 0) " $amt" else ""
@@ -453,64 +542,29 @@ private fun SubmittedBlock(
         }
     }
 
-    if (situationAnalysis != null || situationError != null || loadingSituation) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-        ) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(
-                    "AI 牌局分析（独立视角）",
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                )
-                when {
-                    loadingSituation -> Row(
-                        Modifier.padding(top = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text("分析中…（自动重试）")
-                    }
-                    situationAnalysis != null -> AiMarkdown(situationAnalysis)
-                    situationError != null -> ErrorWithRetry(
-                        message = situationError,
-                        onRetry = onRetrySituation,
-                    )
-                }
-            }
-        }
+    if (situationTurns.isNotEmpty() || situationError != null || loadingSituation) {
+        AiConversation(
+            title = "AI 牌局分析（独立视角）",
+            turns = situationTurns,
+            loading = loadingSituation,
+            error = situationError,
+            onRetry = onRetrySituation,
+            onFollowUp = onFollowUpSituation,
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+            onContainerColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        )
     }
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Text(
-                "AI 对你决策的评价 + 原因推断",
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-            Spacer(Modifier.height(6.dp))
-            when {
-                loadingEvaluation -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text("AI 评价生成中…（自动重试）")
-                }
-                choiceEvaluation != null -> AiMarkdown(choiceEvaluation)
-                evaluationError != null -> ErrorWithRetry(
-                    message = evaluationError,
-                    onRetry = onRetryEvaluation,
-                )
-                else -> Text(
-                    "（暂无，请检查 API Key / 网络）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
+    AiConversation(
+        title = "AI 对你决策的评价 + 原因推断",
+        turns = evaluationTurns,
+        loading = loadingEvaluation,
+        error = evaluationError,
+        onRetry = onRetryEvaluation,
+        onFollowUp = onFollowUpEvaluation,
+        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        onContainerColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    )
 }
 
 /** Reusable error row: message + manual retry affordance. */
