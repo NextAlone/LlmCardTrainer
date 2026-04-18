@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -64,6 +65,7 @@ import xyz.nextalone.cardtrainer.storage.AppSettings
 import xyz.nextalone.cardtrainer.storage.MahjongSession
 import xyz.nextalone.cardtrainer.storage.loadMahjongSession
 import xyz.nextalone.cardtrainer.storage.saveMahjongSession
+import xyz.nextalone.cardtrainer.util.withRetry
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.launch
 
@@ -82,6 +84,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     var pendingQue by remember { mutableStateOf(savedSession?.pendingQue ?: Suit.WAN) }
     var hand by remember { mutableStateOf(trainer.hand.toList()) }
     var advice by remember { mutableStateOf(savedSession?.advice) }
+    var adviceError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var showGlossary by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -106,10 +109,11 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     fun askCoach() {
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
-            advice = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            adviceError = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
             return
         }
         loading = true
+        adviceError = null
         scope.launch {
             val coach = LlmProviders.create(cfg)
             try {
@@ -130,21 +134,25 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                 val typeReport = if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, trainer.missing)) {
                     HandType.classify(hand)
                 } else null
-                advice = coach.coach(
-                    systemPrompt = Prompts.MAHJONG_SYSTEM,
-                    userPrompt = Prompts.mahjongUser(
-                        hand = hand,
-                        missing = trainer.missing!!,
-                        discards = trainer.discards.toList(),
-                        suggestions = suggestions,
-                        wallRemaining = trainer.wallRemaining(),
-                        liveWaits = liveWaits,
-                        safety = safety,
-                        handType = typeReport,
-                    ),
-                )
+                val result = withRetry {
+                    coach.coach(
+                        systemPrompt = Prompts.MAHJONG_SYSTEM,
+                        userPrompt = Prompts.mahjongUser(
+                            hand = hand,
+                            missing = trainer.missing!!,
+                            discards = trainer.discards.toList(),
+                            suggestions = suggestions,
+                            wallRemaining = trainer.wallRemaining(),
+                            liveWaits = liveWaits,
+                            safety = safety,
+                            handType = typeReport,
+                        ),
+                    )
+                }
+                advice = result
+                adviceError = null
             } catch (t: Throwable) {
-                advice = "请求失败：${t.message}"
+                adviceError = t.message ?: t::class.simpleName ?: "未知错误"
             } finally {
                 coach.close()
                 loading = false
@@ -156,6 +164,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
         trainer = SichuanTrainer()
         hand = emptyList()
         advice = null
+        adviceError = null
         step = MjStep.NOT_DEALT
     }
 
@@ -285,6 +294,8 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                     hand = hand,
                     missing = trainer.missing!!,
                     advice = advice,
+                    adviceError = adviceError,
+                    onRetryAdvice = ::askCoach,
                     onDiscard = { tile ->
                         trainer.discard(tile)
                         // 3 bots draw+discard, then hero draws — this is the
@@ -292,6 +303,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                         trainer.runOpponentsAndDraw()
                         refreshHand()
                         advice = null
+                        adviceError = null
                     },
                 )
             }
@@ -309,6 +321,8 @@ private fun PlayingContent(
     hand: List<Tile>,
     missing: Suit,
     advice: String?,
+    adviceError: String?,
+    onRetryAdvice: () -> Unit,
     onDiscard: (Tile) -> Unit,
 ) {
     val shanten = remember(hand) { HandCheck.shanten(hand, missing) }
@@ -413,6 +427,31 @@ private fun PlayingContent(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
         ) {
             AiMarkdown(it)
+        }
+    }
+
+    adviceError?.let { err ->
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+            ),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "请求失败：$err",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                FilledTonalButton(onClick = onRetryAdvice) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("重试")
+                }
+            }
         }
     }
 }
