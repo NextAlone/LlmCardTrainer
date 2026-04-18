@@ -66,31 +66,60 @@ import xyz.nextalone.cardtrainer.engine.holdem.OutsReport
 import xyz.nextalone.cardtrainer.engine.holdem.PreflopChart
 import xyz.nextalone.cardtrainer.engine.holdem.Street
 import xyz.nextalone.cardtrainer.storage.AppSettings
+import xyz.nextalone.cardtrainer.storage.PokerSession
+import xyz.nextalone.cardtrainer.storage.loadPokerSession
+import xyz.nextalone.cardtrainer.storage.savePokerSession
 
-private enum class Phase { DECIDING, SUBMITTED }
+private typealias Phase = PokerSession.Phase
 
 @Composable
 fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     val trainer = remember { HoldemTrainer() }
-    var table by remember { mutableStateOf(trainer.newHand()) }
-    var phase by remember { mutableStateOf(Phase.DECIDING) }
+
+    // Restore prior session (if any) on first composition, else start fresh.
+    val initial: PokerSession = remember {
+        settings.loadPokerSession()?.also { trainer.restoreFrom(it.table) }
+            ?: PokerSession(table = trainer.newHand(), phase = PokerSession.Phase.DECIDING)
+    }
+
+    var table by remember { mutableStateOf(initial.table) }
+    var phase by remember { mutableStateOf(initial.phase) }
 
     // Algorithmic analysis — only revealed after submit.
     var equityPct by remember { mutableStateOf<Double?>(null) }
     var outs by remember { mutableStateOf<OutsReport?>(null) }
     // AI-provided situation analysis, pre-computed in background during DECIDING.
-    var situationAnalysis by remember { mutableStateOf<String?>(null) }
+    var situationAnalysis by remember { mutableStateOf(initial.situationAnalysis) }
     var loadingSituation by remember { mutableStateOf(false) }
     // AI-provided choice evaluation, computed after submit.
-    var choiceEvaluation by remember { mutableStateOf<String?>(null) }
+    var choiceEvaluation by remember { mutableStateOf(initial.choiceEvaluation) }
     var loadingEvaluation by remember { mutableStateOf(false) }
 
-    var userChoice by remember { mutableStateOf<Pair<Action, Int>?>(null) }
+    var userChoice by remember {
+        mutableStateOf(
+            initial.userChoiceAction?.let { act -> act to (initial.userChoiceAmount ?: 0) },
+        )
+    }
     var showGlossary by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     val preflopBaseline = remember(table.hero, table.heroPosition) {
         PreflopChart.rfiAction(table.heroPosition, table.hero)
+    }
+
+    // Persist the session on every meaningful state change so relaunching the
+    // app resumes exactly where the user left off.
+    LaunchedEffect(table, phase, userChoice, situationAnalysis, choiceEvaluation) {
+        settings.savePokerSession(
+            PokerSession(
+                table = table,
+                phase = phase,
+                userChoiceAction = userChoice?.first,
+                userChoiceAmount = userChoice?.second,
+                situationAnalysis = situationAnalysis,
+                choiceEvaluation = choiceEvaluation,
+            ),
+        )
     }
 
     // On every street change / new hand: recompute equity+outs off-main-thread,
@@ -108,10 +137,13 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
             withContext(Dispatchers.Default) { Outs.count(table.hero, table.board) }
         } else null
 
+        // Skip the AI call if we already have analysis for this exact board
+        // (e.g. after restoring a session). Avoids duplicate API billing.
+        if (situationAnalysis != null) return@LaunchedEffect
+
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isNotBlank()) {
             loadingSituation = true
-            situationAnalysis = null
             val coach = LlmProviders.create(cfg)
             try {
                 situationAnalysis = coach.coach(

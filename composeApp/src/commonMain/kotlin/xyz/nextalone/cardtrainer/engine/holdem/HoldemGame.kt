@@ -1,15 +1,21 @@
 package xyz.nextalone.cardtrainer.engine.holdem
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class Street { PREFLOP, FLOP, TURN, RIVER, SHOWDOWN }
 
+@Serializable
 enum class Position(val label: String) {
     SB("SB"), BB("BB"), UTG("UTG"), MP("MP"), CO("CO"), BTN("BTN"),
 }
 
+@Serializable
 enum class Action(val label: String) {
     FOLD("弃牌"), CHECK("过牌"), CALL("跟注"), BET("下注"), RAISE("加注"), ALL_IN("全下"),
 }
 
+@Serializable
 data class ActionRecord(
     val street: Street,
     val action: Action,
@@ -18,6 +24,7 @@ data class ActionRecord(
     val toCall: Int,
 )
 
+@Serializable
 data class HoldemTable(
     val heroPosition: Position,
     val opponents: Int,
@@ -59,6 +66,16 @@ class HoldemTrainer(private val baseSeed: Long? = null) {
             board = emptyList(),
             history = emptyList(),
         )
+    }
+
+    /**
+     * Rebuild internal deck state from a persisted table: a fresh shuffled deck
+     * minus every card that's already on the table (hero + board). Future
+     * `advanceStreet` deals from this pruned deck.
+     */
+    fun restoreFrom(table: HoldemTable) {
+        deck = Deck(baseSeed)
+        deck.removeSpecific(table.hero + table.board)
     }
 
     fun advanceStreet(table: HoldemTable): HoldemTable {

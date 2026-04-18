@@ -1,11 +1,15 @@
 package xyz.nextalone.cardtrainer.engine.mahjong
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class Suit(val cn: String, val code: Char) {
     WAN("万", 'm'),
     TIAO("条", 's'),
     TONG("筒", 'p'),
 }
 
+@Serializable
 data class Tile(val suit: Suit, val number: Int) : Comparable<Tile> {
     init {
         require(number in 1..9)

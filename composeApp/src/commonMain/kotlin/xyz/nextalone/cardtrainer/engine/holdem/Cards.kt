@@ -1,5 +1,8 @@
 package xyz.nextalone.cardtrainer.engine.holdem
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class Suit(val symbol: String) {
     SPADES("♠"),
     HEARTS("♥"),
@@ -7,6 +10,7 @@ enum class Suit(val symbol: String) {
     CLUBS("♣"),
 }
 
+@Serializable
 enum class Rank(val value: Int, val label: String) {
     TWO(2, "2"),
     THREE(3, "3"),
@@ -23,6 +27,7 @@ enum class Rank(val value: Int, val label: String) {
     ACE(14, "A"),
 }
 
+@Serializable
 data class Card(val rank: Rank, val suit: Suit) {
     val label: String get() = "${rank.label}${suit.symbol}"
     val isRed: Boolean get() = suit == Suit.HEARTS || suit == Suit.DIAMONDS

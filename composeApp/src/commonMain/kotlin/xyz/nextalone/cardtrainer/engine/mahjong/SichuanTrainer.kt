@@ -1,5 +1,7 @@
 package xyz.nextalone.cardtrainer.engine.mahjong
 
+import kotlinx.serialization.Serializable
+
 data class DiscardSuggestion(
     val tile: Tile,
     val shantenAfter: Int,
@@ -7,6 +9,14 @@ data class DiscardSuggestion(
 ) {
     val score: Int get() = -(shantenAfter * 100) + waitSize
 }
+
+@Serializable
+data class SichuanSnapshot(
+    val hand: List<Tile>,
+    val discards: List<Tile>,
+    val missing: Suit?,
+    val wall: List<Tile>,
+)
 
 class SichuanTrainer(seed: Long? = null) {
 
@@ -66,4 +76,18 @@ class SichuanTrainer(seed: Long? = null) {
     }
 
     fun wallRemaining(): Int = wall.size
+
+    fun snapshot(): SichuanSnapshot = SichuanSnapshot(
+        hand = hand.toList(),
+        discards = discards.toList(),
+        missing = missing,
+        wall = wall.toList(),
+    )
+
+    fun restore(s: SichuanSnapshot) {
+        hand = s.hand.toMutableList()
+        discards = s.discards.toMutableList()
+        missing = s.missing
+        wall = ArrayDeque(s.wall)
+    }
 }

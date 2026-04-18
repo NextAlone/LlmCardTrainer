@@ -34,6 +34,15 @@ class AppSettings(private val settings: Settings) {
         )
     }
 
+    /** Low-level string slot used by Snapshots helpers; `null` clears the key. */
+    internal fun saveRaw(key: String, value: String?) {
+        if (value == null) settings.remove(key) else settings.putString(key, value)
+    }
+
+    /** Low-level string read used by Snapshots helpers. Returns null if absent. */
+    internal fun loadRaw(key: String): String? =
+        if (settings.hasKey(key)) settings.getString(key, "") else null
+
     private fun keyApi(k: ProviderKind) = "${k.name}.api_key"
     private fun keyBase(k: ProviderKind) = "${k.name}.base_url"
     private fun keyModel(k: ProviderKind) = "${k.name}.model"
