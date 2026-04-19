@@ -432,7 +432,10 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     if (outcome != null) {
                         OutcomeBlock(outcome!!, table)
                     }
-                    HistoryBlock(table = table)
+                    HandProgressionCard(
+                        table = table,
+                        outcome = outcome,
+                    )
                     CoachTabsBlock(
                         activeTab = activeTab,
                         onTab = { activeTab = it },
@@ -702,22 +705,299 @@ private fun SeatsStrip(table: MultiwayTable) {
     }
 }
 
+/**
+ * Multiway analogue of PokerScreen.HandProgressionCard. Same visual idiom —
+ * one row per street, sub-rows per action round, every seat gets its own
+ * column — but driven off [ActionRecord.actor] so multi-seat lines like
+ * "UTG raise / MP fold / CO cold-call / BTN fold / SB fold / BB call" render
+ * in one grid instead of a flat list.
+ */
 @Composable
-private fun HistoryBlock(table: MultiwayTable) {
-    if (table.history.isEmpty()) return
+private fun HandProgressionCard(
+    table: MultiwayTable,
+    outcome: ShowdownOutcome?,
+) {
+    val c = BrandTheme.colors
+    val streets = buildList {
+        add(Street.PREFLOP)
+        if (table.board.size >= 3) add(Street.FLOP)
+        if (table.board.size >= 4) add(Street.TURN)
+        if (table.board.size >= 5) add(Street.RIVER)
+    }
+    val byStreet = streets.associateWith { s -> table.history.filter { it.street == s } }
+    val handOver = outcome != null
+
     BrandSurface {
-        Eyebrow("行动历史")
-        Spacer(Modifier.height(6.dp))
-        table.history.forEach { rec ->
-            val actor = rec.actor?.label ?: "?"
-            val amt = if (rec.amount > 0) " ${rec.amount}" else ""
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Eyebrow("牌局进程")
+            val heroHand = table.hero.cards?.joinToString("") { it.rank.label } ?: ""
             Text(
-                "${streetLabel(rec.street)} · $actor ${rec.action.label}$amt",
-                style = MaterialTheme.typography.bodySmall,
-                color = BrandTheme.colors.fgMuted,
+                "英雄 ${table.hero.position.label} · $heroHand",
+                style = TextStyle(
+                    fontFamily = BrandMonoFamily,
+                    fontSize = 11.sp,
+                    color = c.fgMuted,
+                ),
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        streets.forEachIndexed { i, street ->
+            MultiwayStreetRow(
+                street = street,
+                current = street == table.street,
+                table = table,
+                records = byStreet[street].orEmpty(),
+                showPending = street == table.street && !handOver && table.isHeroTurn,
+            )
+            if (i != streets.lastIndex) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .padding(vertical = 4.dp)
+                        .background(c.border.copy(alpha = 0.5f)),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MultiwayStreetRow(
+    street: Street,
+    current: Boolean,
+    table: MultiwayTable,
+    records: List<xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>,
+    showPending: Boolean,
+) {
+    val c = BrandTheme.colors
+    val potAtStreet = records.firstOrNull()?.potBefore ?: table.pot
+    val boardSlice: List<PokerCard> = when (street) {
+        Street.PREFLOP -> emptyList()
+        Street.FLOP -> table.board.take(3)
+        Street.TURN -> if (table.board.size >= 4) listOf(table.board[3]) else emptyList()
+        Street.RIVER -> if (table.board.size >= 5) listOf(table.board[4]) else emptyList()
+        Street.SHOWDOWN -> table.board
+    }
+    val seatColumns: List<Position> = if (street == Street.PREFLOP) {
+        listOf(Position.UTG, Position.MP, Position.CO, Position.BTN, Position.SB, Position.BB)
+            .filter { pos -> table.seats.any { it.position == pos && (it.isLive || it.totalContrib > 0) } }
+    } else {
+        listOf(Position.SB, Position.BB, Position.UTG, Position.MP, Position.CO, Position.BTN)
+            .filter { pos ->
+                table.seats.any {
+                    it.position == pos && it.state != SeatState.FOLDED
+                }
+            }
+    }
+    val heroPos = table.hero.position
+    val seated: List<Pair<Position, xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>> =
+        records.mapNotNull { rec ->
+            val actor = rec.actor ?: return@mapNotNull null
+            actor to rec
+        }
+    val rounds = splitIntoRoundsByActor(seated)
+    val lastRoundHasHero = rounds.lastOrNull()?.any { it.first == heroPos } == true
+    val pendingOnLast = showPending && rounds.isNotEmpty() && !lastRoundHasHero
+    val pendingOnNew = showPending && (rounds.isEmpty() || lastRoundHasHero)
+
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                streetLabel(street),
+                style = TextStyle(
+                    fontFamily = BrandMonoFamily,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (current) c.accent else c.fg,
+                    letterSpacing = 1.2.sp,
+                ),
+            )
+            Text(
+                "底池 $potAtStreet",
+                style = TextStyle(
+                    fontFamily = BrandMonoFamily,
+                    fontSize = 11.sp,
+                    color = c.fgMuted,
+                ),
+            )
+            if (boardSlice.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    boardSlice.forEach { card ->
+                        PlayingCardView(
+                            rank = card.rank.label,
+                            suit = card.suit.symbol,
+                            size = CardSize.XS,
+                        )
+                    }
+                }
+            }
+        }
+        rounds.forEachIndexed { idx, round ->
+            val isLast = idx == rounds.lastIndex
+            MultiwaySeatGridRow(
+                seats = seatColumns,
+                heroPos = heroPos,
+                records = round.toMap(),
+                pendingSeat = if (isLast && pendingOnLast) heroPos else null,
+            )
+        }
+        if (pendingOnNew) {
+            MultiwaySeatGridRow(
+                seats = seatColumns,
+                heroPos = heroPos,
+                records = emptyMap(),
+                pendingSeat = heroPos,
             )
         }
     }
+}
+
+private fun splitIntoRoundsByActor(
+    seated: List<Pair<Position, xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>>,
+): List<List<Pair<Position, xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>>> {
+    if (seated.isEmpty()) return emptyList()
+    val rounds = mutableListOf<MutableList<Pair<Position, xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>>>()
+    var current = mutableListOf<Pair<Position, xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>>()
+    val seen = mutableSetOf<Position>()
+    for (item in seated) {
+        if (item.first in seen) {
+            rounds.add(current)
+            current = mutableListOf()
+            seen.clear()
+        }
+        current.add(item)
+        seen.add(item.first)
+    }
+    if (current.isNotEmpty()) rounds.add(current)
+    return rounds
+}
+
+@Composable
+private fun MultiwaySeatGridRow(
+    seats: List<Position>,
+    heroPos: Position,
+    records: Map<Position, xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>,
+    pendingSeat: Position?,
+) {
+    if (seats.isEmpty()) return
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        seats.forEach { pos ->
+            MultiwaySeatGridCell(
+                pos = pos,
+                isHero = pos == heroPos,
+                record = records[pos],
+                isPending = pendingSeat != null && pos == pendingSeat,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MultiwaySeatGridCell(
+    pos: Position,
+    isHero: Boolean,
+    record: xyz.nextalone.cardtrainer.engine.holdem.ActionRecord?,
+    isPending: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val c = BrandTheme.colors
+    Column(
+        modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                pos.label,
+                style = TextStyle(
+                    fontFamily = BrandMonoFamily,
+                    fontSize = 11.sp,
+                    fontWeight = if (isHero) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isHero) c.accent else c.fgMuted,
+                ),
+            )
+            if (isHero) {
+                Text(
+                    "★",
+                    style = TextStyle(
+                        fontFamily = BrandMonoFamily,
+                        fontSize = 9.sp,
+                        color = c.accent,
+                    ),
+                )
+            }
+        }
+        when {
+            record != null -> {
+                val (label, color) = multiwayActionLabelAndColor(record, c)
+                Text(
+                    label,
+                    style = TextStyle(
+                        fontFamily = xyz.nextalone.cardtrainer.ui.theme.BrandBodyFamily,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = color,
+                    ),
+                    maxLines = 1,
+                )
+            }
+            isPending -> Box(
+                Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(1.dp, c.accent.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    "待决策",
+                    style = TextStyle(
+                        fontFamily = xyz.nextalone.cardtrainer.ui.theme.BrandBodyFamily,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = c.accent,
+                    ),
+                )
+            }
+            else -> Text(
+                "—",
+                style = TextStyle(
+                    fontFamily = xyz.nextalone.cardtrainer.ui.theme.BrandBodyFamily,
+                    fontSize = 11.sp,
+                    color = c.fgSubtle.copy(alpha = 0.35f),
+                ),
+            )
+        }
+    }
+}
+
+private fun multiwayActionLabelAndColor(
+    rec: xyz.nextalone.cardtrainer.engine.holdem.ActionRecord,
+    c: xyz.nextalone.cardtrainer.ui.theme.BrandColors,
+): Pair<String, Color> = when (rec.action) {
+    Action.FOLD -> "弃牌" to c.fgSubtle
+    Action.CHECK -> "过牌" to c.fgMuted
+    Action.CALL -> "跟注 ${rec.amount}" to c.suitBlueTong
+    Action.BET -> "下注 ${rec.amount}" to c.accent
+    Action.RAISE -> "加注 ${rec.amount}" to c.accent
+    Action.ALL_IN -> "全下 ${rec.amount}" to c.bad
 }
 
 @Composable
