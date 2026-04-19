@@ -127,9 +127,22 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     val trainer = remember { HoldemTrainer() }
 
     // Restore prior session (if any) on first composition, else start fresh.
+    // Discard legacy preflop sessions saved before PreflopScript existed —
+    // those have empty history and a hard-coded toCall, so they no longer
+    // reflect the realistic scripted scenarios. UTG with empty history is
+    // legitimate (no seats act before UTG) so we keep those.
     val initial: PokerSession = remember {
-        settings.loadPokerSession()?.also { trainer.restoreFrom(it.table) }
-            ?: PokerSession(table = trainer.newHand(), phase = PokerSession.Phase.DECIDING)
+        val saved = settings.loadPokerSession()
+        val isLegacy = saved != null &&
+            saved.table.street == Street.PREFLOP &&
+            saved.table.history.isEmpty() &&
+            saved.table.heroPosition != xyz.nextalone.cardtrainer.engine.holdem.Position.UTG
+        if (saved != null && !isLegacy) {
+            trainer.restoreFrom(saved.table)
+            saved
+        } else {
+            PokerSession(table = trainer.newHand(), phase = PokerSession.Phase.DECIDING)
+        }
     }
 
     var table by remember { mutableStateOf(initial.table) }
@@ -492,6 +505,11 @@ private fun PreflopHistoryCard(table: HoldemTable) {
             Action.ALL_IN -> "${seat.label} 全下"
         }
     }
+    val emptyMsg = if (table.heroPosition == xyz.nextalone.cardtrainer.engine.holdem.Position.UTG) {
+        "你是 UTG，第一个行动 — 没有人在你之前下注。"
+    } else {
+        "（旧版本保存的牌局没有翻前脚本，点击「新牌局」生成新场景。）"
+    }
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -499,9 +517,9 @@ private fun PreflopHistoryCard(table: HoldemTable) {
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("翻前动作（轮到你之前）", fontWeight = FontWeight.SemiBold)
-            Text(summary.ifBlank { "无人行动，直接轮到你" }, style = MaterialTheme.typography.bodyMedium)
+            Text(summary.ifBlank { emptyMsg }, style = MaterialTheme.typography.bodyMedium)
             Text(
-                "→ 现底池 ${table.pot}，你${if (table.toCall == 0) "可免费看牌 / 开池" else "需跟注 ${table.toCall}"}",
+                "→ 现底池 ${table.pot} chips · 你${if (table.toCall == 0) "可过牌 / 开池" else "需跟注 ${table.toCall} chips"} · 当前对手 ${table.opponents} 人",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -523,10 +541,10 @@ private fun DecidingBlock(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    // Preflop action history — shows the user what every seat BEFORE them
-    // did on this hand (fold / limp / open / cold-call / 3-bet), so the
-    // decision context is concrete instead of an abstract pot=3 / toCall=X.
-    if (table.street == Street.PREFLOP && table.history.isNotEmpty()) {
+    // Preflop action history — always shown so the user sees what every
+    // seat BEFORE them did on this hand (or 'first to act' for UTG), with
+    // the resulting pot and toCall.
+    if (table.street == Street.PREFLOP) {
         PreflopHistoryCard(table = table)
     }
 
