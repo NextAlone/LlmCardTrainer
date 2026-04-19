@@ -437,7 +437,6 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                         outs = outs,
                         revealed = revealedFor == table.street || outcome != null,
                     )
-                    SeatsStrip(table = table)
                     if (outcome != null) {
                         OutcomeBlock(outcome!!, table)
                     }
@@ -687,39 +686,75 @@ private fun FeltStat(label: String, value: String, valueColor: Color, big: Boole
     }
 }
 
+/**
+ * Compact contribution strip: one column per dealt-in seat, showing
+ * [Position] label + cumulative totalContrib. Rendered at the top of the
+ * HandProgressionCard so the per-round action grid below doesn't need a
+ * separate seats card to answer 'who has put in how much'.
+ */
 @Composable
-private fun SeatsStrip(table: MultiwayTable) {
-    // Keep every dealt-in seat visible, even after a fold, so the user can
-    // see the full pot contribution breakdown (who put in what). Only the
-    // truly empty chairs (cards == null) are filtered out — those are seats
-    // that were never dealt a hand at table-setup time.
+private fun ContributionStrip(table: MultiwayTable) {
     val seated = table.seats.filter { it.cards != null || it.isHero }
     if (seated.isEmpty()) return
-    BrandSurface {
-        Eyebrow("座位 · 累计投入")
-        Spacer(Modifier.height(8.dp))
+    val c = BrandTheme.colors
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "累计投入",
+            style = TextStyle(
+                fontFamily = BrandMonoFamily,
+                fontSize = 10.sp,
+                color = c.fgSubtle,
+                letterSpacing = 1.2.sp,
+            ),
+        )
         FlowRow(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             seated.forEach { seat ->
                 val idx = table.seats.indexOf(seat)
+                val active = idx == table.toActIndex
                 val isFolded = seat.state == SeatState.FOLDED
-                // Folded seats collapse their label to '—' so the position
-                // bubble reads like a retired slot but the chips-in number
-                // underneath still lets the user reason about the pot.
-                val label = when {
-                    isFolded -> "—"
-                    seat.isHero -> "${seat.position.label}·你"
-                    else -> seat.position.label
+                val isAllIn = seat.state == SeatState.ALL_IN
+                val posColor = when {
+                    seat.isHero -> c.accent
+                    active -> c.accent
+                    isFolded -> c.fgSubtle
+                    else -> c.fgMuted
                 }
-                SeatPip(
-                    label = label,
-                    active = idx == table.toActIndex,
-                    folded = isFolded,
-                    bet = seat.totalContrib.takeIf { it > 0 },
-                )
+                val chipColor = when {
+                    isAllIn -> c.bad
+                    seat.totalContrib > 0 -> c.fg
+                    else -> c.fgSubtle
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        if (isFolded) "—" else seat.position.label + if (seat.isHero) "★" else "",
+                        style = TextStyle(
+                            fontFamily = BrandMonoFamily,
+                            fontSize = 11.sp,
+                            fontWeight = if (seat.isHero || active) FontWeight.SemiBold else FontWeight.Medium,
+                            color = posColor,
+                        ),
+                    )
+                    Text(
+                        seat.totalContrib.toString(),
+                        style = TextStyle(
+                            fontFamily = BrandMonoFamily,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = chipColor,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -764,7 +799,11 @@ private fun HandProgressionCard(
                 ),
             )
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
+        ContributionStrip(table = table)
+        Spacer(Modifier.height(8.dp))
+        BrandDivider()
+        Spacer(Modifier.height(4.dp))
         streets.forEachIndexed { i, street ->
             MultiwayStreetRow(
                 street = street,
