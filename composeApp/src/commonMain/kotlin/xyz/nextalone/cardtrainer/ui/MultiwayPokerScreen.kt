@@ -603,10 +603,15 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             }
         }
         val topRight: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
-            // Opponent count is already shown in the TableStrip header, so
-            // the top bar only carries transient AI state to avoid chip
-            // duplication.
             if (situationLoadingFor.isNotEmpty()) BrandChip("AI 预载", tone = ChipTone.Accent)
+            // Always-available escape hatch. Bottom bar only mounts a
+            // '新牌局' button in the hand-settled state, so the top bar
+            // covers bailing mid-hand.
+            FilledTonalButton(onClick = ::startNewHand) {
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text("新牌局")
+            }
         }
         val eyebrow = "HOLD'EM MULTIWAY · ${table.hero.position.label} · ${streetLabel(table.street)}"
         val title = "多人训练（实验引擎）"
@@ -1452,41 +1457,35 @@ private fun MultiwayBottomBar(
             selected = selectedStreet,
             onSelect = onSelectStreet,
         )
-        if (heroTurn) {
-            MultiwayActionSheet(table = table, onSubmit = onSubmit)
-        }
-        PinnedActionBar {
-            when {
-                handOver -> {
-                    Spacer(Modifier.weight(1f))
-                    OutlinedButton(onClick = onNewHand) { Text("新牌局") }
-                    Button(onClick = onNewHand) { Text("开始下一手") }
+        // Single bottom surface that switches mode by state:
+        //  - heroTurn: show ActionSheet only, no extra bar.
+        //  - streetClosed: full-width '发下一街' / '摊牌' button.
+        //  - handOver: full-width '开始下一手' button.
+        //  - waiting on villain: a subtle status line.
+        when {
+            heroTurn -> MultiwayActionSheet(table = table, onSubmit = onSubmit)
+            streetClosed -> PinnedActionBar {
+                Text(
+                    "本街结束 · 查看分析后继续",
+                    color = BrandTheme.colors.fgMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.weight(1f))
+                Button(onClick = onAdvanceStreet) {
+                    Text(if (table.street == Street.RIVER) "摊牌" else "发下一街")
                 }
-                streetClosed -> {
-                    Text(
-                        "本街结束 · 查看 A/B/C 分析后继续",
-                        color = BrandTheme.colors.fgMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    OutlinedButton(onClick = onNewHand) { Text("新牌局") }
-                    Button(onClick = onAdvanceStreet) {
-                        Text(if (table.street == Street.RIVER) "摊牌" else "发下一街")
-                    }
-                }
-                heroTurn -> {
-                    Spacer(Modifier.weight(1f))
-                    OutlinedButton(onClick = onNewHand) { Text("新牌局") }
-                }
-                else -> {
-                    Text(
-                        "等待 ${table.seats.getOrNull(table.toActIndex)?.position?.label ?: "…"} 行动",
-                        color = BrandTheme.colors.fgMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    OutlinedButton(onClick = onNewHand) { Text("新牌局") }
-                }
+            }
+            handOver -> PinnedActionBar {
+                Spacer(Modifier.weight(1f))
+                Button(onClick = onNewHand) { Text("开始下一手") }
+            }
+            else -> PinnedActionBar {
+                Text(
+                    "等待 ${table.seats.getOrNull(table.toActIndex)?.position?.label ?: "…"} 行动…",
+                    color = BrandTheme.colors.fgMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.weight(1f))
             }
         }
     }
