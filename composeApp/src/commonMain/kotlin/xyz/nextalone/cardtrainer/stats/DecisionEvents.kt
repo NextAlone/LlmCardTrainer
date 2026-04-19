@@ -31,6 +31,35 @@ data class PokerDecisionEvent(
 )
 
 /**
+ * A single hero multiway-poker decision. Parallel to [PokerDecisionEvent] but
+ * captures multiway-specific state (live opponent count, current bet level)
+ * instead of the single-villain response field. [handId] ties every decision
+ * in the same hand together so the terminal result (hero won / resolution)
+ * can be back-filled once the hand settles.
+ */
+@Serializable
+data class MultiwayDecisionEvent(
+    val timestampMs: Long,
+    val handId: Long,
+    val position: String,
+    val street: String,
+    val handLabel: String,
+    val boardSize: Int,
+    val potBefore: Int,
+    val toCall: Int,
+    val currentBet: Int,
+    val liveOpponents: Int,
+    val action: String,
+    val amount: Int,
+    val potAfter: Int,
+    val heroStackAfter: Int,
+    // Filled by updateMultiwayHandResult once the hand settles.
+    val handOver: Boolean = false,
+    val heroWonHand: Boolean? = null,
+    val handResolution: String? = null, // "FOLD" / "UNCONTESTED" / "SHOWDOWN"
+)
+
+/**
  * A single hero mahjong discard, captured each time the user plays a tile.
  * Enough state to compute top-1 match with the engine, per-session
  * shanten progression, discard-danger profile, etc.

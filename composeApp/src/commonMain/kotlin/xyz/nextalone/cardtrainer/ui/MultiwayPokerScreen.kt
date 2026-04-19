@@ -57,7 +57,10 @@ import xyz.nextalone.cardtrainer.engine.holdem.Action
 import xyz.nextalone.cardtrainer.engine.holdem.Card as PokerCard
 import xyz.nextalone.cardtrainer.engine.holdem.Deck
 import xyz.nextalone.cardtrainer.engine.holdem.Position
+import xyz.nextalone.cardtrainer.engine.holdem.PreflopChart
 import xyz.nextalone.cardtrainer.engine.holdem.Street
+import xyz.nextalone.cardtrainer.stats.MultiwayDecisionEvent
+import xyz.nextalone.cardtrainer.stats.StatsRepository
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.MultiwayEngine
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.MultiwayTable
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.Seat
@@ -123,6 +126,9 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     var recapFor by remember(handSeed) { mutableStateOf<Street?>(null) }
 
     var activeTab by remember(handSeed) { mutableStateOf(0) }
+
+    val statsRepo = remember { StatsRepository(settings) }
+    var resultRecordedFor by remember { mutableStateOf<Long?>(null) }
 
     suspend fun runSituation(forTable: MultiwayTable) {
         val cfg = settings.activeConfig()
@@ -287,9 +293,54 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         val choice = action to amount
         userChoice = choice
         val snapForEval = table
-        table = MultiwayEngine.applyHeroAction(table, action, amount)
+        val potBefore = snapForEval.pot
+        val toCallBefore = snapForEval.heroToCall
+        val currentBetBefore = snapForEval.currentBet
+        val liveOpps = snapForEval.seats.count { !it.isHero && it.isLive }
+        val handLabel = snapForEval.hero.cards?.let { PreflopChart.encode(it) } ?: ""
+        val streetName = snapForEval.street.name
+        val boardSize = snapForEval.board.size
+        table = MultiwayEngine.applyHeroAction(snapForEval, action, amount)
+        statsRepo.recordMultiway(
+            MultiwayDecisionEvent(
+                timestampMs = nowEpochMs(),
+                handId = handSeed,
+                position = snapForEval.hero.position.label,
+                street = streetName,
+                handLabel = handLabel,
+                boardSize = boardSize,
+                potBefore = potBefore,
+                toCall = toCallBefore,
+                currentBet = currentBetBefore,
+                liveOpponents = liveOpps,
+                action = action.name,
+                amount = amount,
+                potAfter = table.pot,
+                heroStackAfter = table.hero.stack,
+            ),
+        )
         scope.launch { runEvaluation(snapForEval, choice) }
         activeTab = 1
+    }
+
+    // Back-fill hand result onto every decision event for this hand once the
+    // outcome is known. Guarded by resultRecordedFor so a recompose after the
+    // update doesn't rewrite the same events.
+    LaunchedEffect(outcome, handSeed) {
+        val o = outcome ?: return@LaunchedEffect
+        if (resultRecordedFor == handSeed) return@LaunchedEffect
+        val heroIdx = table.heroIndex
+        val heroWon = o.awards.any { heroIdx in it.winnerSeats }
+        val heroLastAction = table.history
+            .lastOrNull { it.actor == table.hero.position }
+            ?.action
+        val resolution = when {
+            heroLastAction == Action.FOLD -> "FOLD"
+            table.seats.count { it.isLive } <= 1 -> "UNCONTESTED"
+            else -> "SHOWDOWN"
+        }
+        statsRepo.updateMultiwayHandResult(handSeed, heroWon, resolution)
+        resultRecordedFor = handSeed
     }
 
     WithDeviceMode { mode ->

@@ -36,11 +36,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.nextalone.cardtrainer.stats.MahjongStatsCalc
+import xyz.nextalone.cardtrainer.stats.MultiwayDecisionEvent
 import xyz.nextalone.cardtrainer.stats.PokerStatsCalc
 import xyz.nextalone.cardtrainer.stats.StatsRepository
 import xyz.nextalone.cardtrainer.storage.AppSettings
 
-private enum class StatsTab { POKER, MAHJONG }
+private enum class StatsTab { POKER, MULTIWAY, MAHJONG }
 
 @Composable
 fun StatsScreen(settings: AppSettings, onBack: () -> Unit) {
@@ -49,6 +50,7 @@ fun StatsScreen(settings: AppSettings, onBack: () -> Unit) {
     // Re-read on every compose so fresh events from the other screens show up
     // when the user navigates back here. Could switch to StateFlow later.
     val pokerEvents = remember(tab) { repo.loadPoker() }
+    val multiwayEvents = remember(tab) { repo.loadMultiway() }
     val mahjongEvents = remember(tab) { repo.loadMahjong() }
 
     xyz.nextalone.cardtrainer.ui.components.WithDeviceMode { mode ->
@@ -60,6 +62,11 @@ fun StatsScreen(settings: AppSettings, onBack: () -> Unit) {
                 "德州 · ${pokerEvents.size}",
                 tone = if (tab == StatsTab.POKER) xyz.nextalone.cardtrainer.ui.components.ChipTone.Accent else xyz.nextalone.cardtrainer.ui.components.ChipTone.Outline,
                 onClick = { tab = StatsTab.POKER },
+            )
+            xyz.nextalone.cardtrainer.ui.components.BrandChip(
+                "多人 · ${multiwayEvents.size}",
+                tone = if (tab == StatsTab.MULTIWAY) xyz.nextalone.cardtrainer.ui.components.ChipTone.Accent else xyz.nextalone.cardtrainer.ui.components.ChipTone.Outline,
+                onClick = { tab = StatsTab.MULTIWAY },
             )
             xyz.nextalone.cardtrainer.ui.components.BrandChip(
                 "麻将 · ${mahjongEvents.size}",
@@ -82,6 +89,10 @@ fun StatsScreen(settings: AppSettings, onBack: () -> Unit) {
                     StatsTab.POKER -> PokerStatsContent(
                         events = pokerEvents,
                         onClear = { repo.clearPoker() },
+                    )
+                    StatsTab.MULTIWAY -> MultiwayStatsContent(
+                        events = multiwayEvents,
+                        onClear = { repo.clearMultiway() },
                     )
                     StatsTab.MAHJONG -> MahjongStatsContent(
                         events = mahjongEvents,
@@ -169,6 +180,82 @@ private fun PokerStatsContent(
 
     OutlinedButton(onClick = onClear, modifier = Modifier.fillMaxWidth()) {
         Text("清空德州统计")
+    }
+}
+
+@Composable
+private fun MultiwayStatsContent(
+    events: List<MultiwayDecisionEvent>,
+    onClear: () -> Unit,
+) {
+    if (events.isEmpty()) {
+        Text("暂无多人训练数据。在『设置 · 德扑引擎 (实验)』启用新引擎并打几手后回来看。")
+        return
+    }
+    val uniqueHands = events.map { it.handId }.toSet().size
+    val completedHandEvents = events.filter { it.handOver }.distinctBy { it.handId }
+    val completedCount = completedHandEvents.size
+    val wonHands = completedHandEvents.count { it.heroWonHand == true }
+    val winRate = if (completedCount > 0) {
+        wonHands.toDouble() / completedCount * 100
+    } else 0.0
+    val totalActions = events.size.coerceAtLeast(1)
+    val counts = events.groupingBy { it.action }.eachCount()
+    fun rate(key: String) = (counts[key] ?: 0).toDouble() / totalActions * 100
+    val foldRate = rate("FOLD")
+    val checkRate = rate("CHECK")
+    val callRate = rate("CALL")
+    val betRate = rate("BET")
+    val raiseRate = rate("RAISE")
+    val allInRate = rate("ALL_IN")
+    val aggressive = betRate + raiseRate + allInRate
+    val avgLiveOpp = events.map { it.liveOpponents }.average()
+
+    MetricsCard(
+        title = "多人行为指标",
+        rows = listOf(
+            "决策总数" to "${events.size}",
+            "手数" to "$uniqueHands",
+            "已结束手数" to "$completedCount",
+            "平均存活对手" to format1(avgLiveOpp),
+            "激进率 (BET/RAISE/ALL_IN)" to "${format1(aggressive)}%",
+        ),
+    )
+
+    MetricsCard(
+        title = "多人动作分布",
+        rows = listOf(
+            "弃牌" to "${format1(foldRate)}%",
+            "过牌" to "${format1(checkRate)}%",
+            "跟注" to "${format1(callRate)}%",
+            "下注" to "${format1(betRate)}%",
+            "加注" to "${format1(raiseRate)}%",
+            "全下" to "${format1(allInRate)}%",
+        ),
+    )
+
+    MetricsCard(
+        title = "胜负结算",
+        rows = listOf(
+            "赢率（含 uncontested）" to "${format1(winRate)}%",
+            "弃牌结束" to "${completedHandEvents.count { it.handResolution == "FOLD" }}",
+            "对手被迫弃" to "${completedHandEvents.count { it.handResolution == "UNCONTESTED" }}",
+            "摊牌到底" to "${completedHandEvents.count { it.handResolution == "SHOWDOWN" }}",
+        ),
+    )
+
+    RecentEventsCard(
+        title = "最近 10 条决策",
+        lines = events.takeLast(10).reversed().map { e ->
+            val suffix = e.heroWonHand?.let { if (it) " · 赢" else " · 输" } ?: ""
+            "${e.street} ${e.position} ${e.handLabel} · ${cnAction(e.action)}" +
+                (if (e.amount > 0) " ${e.amount}" else "") +
+                " · ${e.liveOpponents}对手$suffix"
+        },
+    )
+
+    OutlinedButton(onClick = onClear, modifier = Modifier.fillMaxWidth()) {
+        Text("清空多人统计")
     }
 }
 

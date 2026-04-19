@@ -42,12 +42,43 @@ class StatsRepository(private val settings: AppSettings) {
             .getOrDefault(emptyList())
     }
 
+    fun recordMultiway(event: MultiwayDecisionEvent) {
+        val updated = (loadMultiway() + event).takeLast(MAX_EVENTS)
+        settings.saveRaw(KEY_MULTIWAY, json.encodeToString(updated))
+    }
+
+    fun loadMultiway(): List<MultiwayDecisionEvent> {
+        val raw = settings.loadRaw(KEY_MULTIWAY) ?: return emptyList()
+        return runCatching { json.decodeFromString<List<MultiwayDecisionEvent>>(raw) }
+            .getOrDefault(emptyList())
+    }
+
+    /**
+     * Back-fill the terminal result onto every event that shares [handId].
+     * Called once from the multiway screen when a showdown / fold finishes
+     * the hand; events written during the hand had heroWonHand = null.
+     */
+    fun updateMultiwayHandResult(handId: Long, heroWon: Boolean, resolution: String) {
+        val all = loadMultiway()
+        if (all.none { it.handId == handId }) return
+        val patched = all.map {
+            if (it.handId == handId) {
+                it.copy(handOver = true, heroWonHand = heroWon, handResolution = resolution)
+            } else {
+                it
+            }
+        }
+        settings.saveRaw(KEY_MULTIWAY, json.encodeToString(patched))
+    }
+
     fun clearPoker() = settings.saveRaw(KEY_POKER, null)
     fun clearMahjong() = settings.saveRaw(KEY_MAHJONG, null)
+    fun clearMultiway() = settings.saveRaw(KEY_MULTIWAY, null)
 
     companion object {
         const val MAX_EVENTS = 500
         private const val KEY_POKER = "stats.poker.events"
         private const val KEY_MAHJONG = "stats.mahjong.events"
+        private const val KEY_MULTIWAY = "stats.poker.multiway.events"
     }
 }
