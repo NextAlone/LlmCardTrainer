@@ -471,38 +471,50 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
             )
         },
         bottomBar = {
-            // Pinned navigation: 发下一街 + 新牌局 only appear after the user has
-            // submitted their decision; before that, DecidingBlock shows its own
-            // 提交 / 新牌局 buttons. At RIVER (all 5 board cards dealt) we hide
-            // 发下一街 — real Hold'em has no betting round after the river
-            // decision, showdown is just comparing cards.
-            if (phase == Phase.SUBMITTED) {
-                val canAdvance = table.street == Street.PREFLOP ||
-                    table.street == Street.FLOP ||
-                    table.street == Street.TURN
-                Surface(tonalElevation = 3.dp) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        if (canAdvance) {
-                            FilledTonalButton(
-                                onClick = {
-                                    table = trainer.advanceStreet(table)
-                                    phase = Phase.DECIDING
-                                    userChoice = null
-                                    evaluationTurns = emptyList()
-                                    evaluationError = null
-                                    situationTurns = emptyList()
-                                    situationError = null
-                                },
+            // Pinned action row, always visible — no scrolling to reach it.
+            //  - DECIDING:  提交决策 (disabled until the user picks a size) + 新牌局
+            //  - SUBMITTED + can advance (PREFLOP/FLOP/TURN): 发下一街 + 新牌局
+            //  - SUBMITTED on river (hand over): 新牌局 only
+            Surface(tonalElevation = 3.dp) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    when (phase) {
+                        Phase.DECIDING -> {
+                            Button(
+                                onClick = ::submitDecision,
+                                enabled = userChoice != null,
                                 modifier = Modifier.weight(1f),
-                            ) { Text("发下一街") }
+                            ) { Text("提交决策") }
+                            OutlinedButton(
+                                onClick = ::startNewHand,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("新牌局") }
                         }
-                        OutlinedButton(
-                            onClick = ::startNewHand,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("新牌局") }
+                        Phase.SUBMITTED -> {
+                            val canAdvance = table.street == Street.PREFLOP ||
+                                table.street == Street.FLOP ||
+                                table.street == Street.TURN
+                            if (canAdvance) {
+                                FilledTonalButton(
+                                    onClick = {
+                                        table = trainer.advanceStreet(table)
+                                        phase = Phase.DECIDING
+                                        userChoice = null
+                                        evaluationTurns = emptyList()
+                                        evaluationError = null
+                                        situationTurns = emptyList()
+                                        situationError = null
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("发下一街") }
+                            }
+                            OutlinedButton(
+                                onClick = ::startNewHand,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("新牌局") }
+                        }
                     }
                 }
             }
@@ -536,8 +548,6 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     table = table,
                     userChoice = userChoice,
                     onChoose = { act, amt -> userChoice = act to amt },
-                    onSubmit = ::submitDecision,
-                    onNewHand = ::startNewHand,
                 )
                 Phase.SUBMITTED -> SubmittedBlock(
                     table = table,
@@ -650,8 +660,6 @@ private fun DecidingBlock(
     table: HoldemTable,
     userChoice: Pair<Action, Int>?,
     onChoose: (Action, Int) -> Unit,
-    onSubmit: () -> Unit,
-    onNewHand: () -> Unit,
 ) {
     Text(
         "请先独立判断，选择你的动作。AI 与算法结果会在提交后显示。",
@@ -723,21 +731,8 @@ private fun DecidingBlock(
             label = { Text("选用") },
         )
     }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Button(
-            onClick = onSubmit,
-            enabled = userChoice != null,
-            modifier = Modifier.weight(1f),
-        ) { Text("提交决策") }
-        OutlinedButton(
-            onClick = onNewHand,
-            modifier = Modifier.weight(1f),
-        ) { Text("新牌局") }
-    }
+    // 提交决策 / 新牌局 are in the pinned Scaffold.bottomBar above — kept out
+    // of the scrolling content so the user never has to scroll to submit.
 }
 
 @Composable
