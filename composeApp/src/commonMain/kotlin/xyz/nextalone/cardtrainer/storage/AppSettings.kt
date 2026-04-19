@@ -32,6 +32,15 @@ class AppSettings(private val settings: Settings) {
         get() = settings.getBoolean(KEY_MULTIWAY, false)
         set(value) = settings.putBoolean(KEY_MULTIWAY, value)
 
+    /**
+     * Opponents at the multiway table (1-5). 1 is heads-up, 5 is a full
+     * 6-max ring. The engine requires 1..5 — values outside that range are
+     * clamped on read.
+     */
+    var multiwayOpponents: Int
+        get() = settings.getInt(KEY_MULTIWAY_OPPONENTS, 3).coerceIn(1, 5)
+        set(value) = settings.putInt(KEY_MULTIWAY_OPPONENTS, value.coerceIn(1, 5))
+
     /** Active provider config for use by coach. */
     fun activeConfig(): ProviderConfig {
         val k = providerKind
@@ -59,6 +68,7 @@ class AppSettings(private val settings: Settings) {
     companion object {
         private const val KEY_PROVIDER = "active_provider"
         private const val KEY_MULTIWAY = "engine.multiway_enabled"
+        private const val KEY_MULTIWAY_OPPONENTS = "engine.multiway_opponents"
     }
 }
 

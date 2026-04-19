@@ -7,9 +7,11 @@ package xyz.nextalone.cardtrainer.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,31 +45,41 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import xyz.nextalone.cardtrainer.coach.ChatTurn
 import xyz.nextalone.cardtrainer.coach.LlmProviders
 import xyz.nextalone.cardtrainer.coach.Prompts
 import xyz.nextalone.cardtrainer.engine.holdem.Action
 import xyz.nextalone.cardtrainer.engine.holdem.Card as PokerCard
 import xyz.nextalone.cardtrainer.engine.holdem.Deck
+import xyz.nextalone.cardtrainer.engine.holdem.Draws
+import xyz.nextalone.cardtrainer.engine.holdem.Equity
+import xyz.nextalone.cardtrainer.engine.holdem.HandEvaluator
+import xyz.nextalone.cardtrainer.engine.holdem.Outs
+import xyz.nextalone.cardtrainer.engine.holdem.OutsReport
 import xyz.nextalone.cardtrainer.engine.holdem.Position
 import xyz.nextalone.cardtrainer.engine.holdem.PreflopChart
 import xyz.nextalone.cardtrainer.engine.holdem.Street
-import xyz.nextalone.cardtrainer.stats.MultiwayDecisionEvent
-import xyz.nextalone.cardtrainer.stats.StatsRepository
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.MultiwayEngine
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.MultiwayTable
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.Seat
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.SeatState
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.Showdown
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.ShowdownOutcome
+import xyz.nextalone.cardtrainer.stats.MultiwayDecisionEvent
+import xyz.nextalone.cardtrainer.stats.StatsRepository
 import xyz.nextalone.cardtrainer.storage.AppSettings
 import xyz.nextalone.cardtrainer.ui.components.BrandChip
 import xyz.nextalone.cardtrainer.ui.components.BrandDivider
@@ -76,34 +89,28 @@ import xyz.nextalone.cardtrainer.ui.components.ChipTone
 import xyz.nextalone.cardtrainer.ui.components.DeviceMode
 import xyz.nextalone.cardtrainer.ui.components.Eyebrow
 import xyz.nextalone.cardtrainer.ui.components.FeltSurface
+import xyz.nextalone.cardtrainer.ui.components.PinnedActionBar
 import xyz.nextalone.cardtrainer.ui.components.PlayingCardView
 import xyz.nextalone.cardtrainer.ui.components.SeatPip
-import xyz.nextalone.cardtrainer.ui.components.StatReadout
 import xyz.nextalone.cardtrainer.ui.components.WithDeviceMode
-import xyz.nextalone.cardtrainer.ui.theme.BrandBodyFamily
+import xyz.nextalone.cardtrainer.ui.theme.BrandDisplayFamily
 import xyz.nextalone.cardtrainer.ui.theme.BrandMonoFamily
 import xyz.nextalone.cardtrainer.ui.theme.BrandTheme
 import xyz.nextalone.cardtrainer.util.nowEpochMs
 import xyz.nextalone.cardtrainer.util.withRetry
 
-/**
- * Multiway-engine screen — now dressed in the brand primitives so it reads
- * as a sibling of PokerScreen, not a plain-Material3 debug screen. Engine
- * behaviour and the three coach slots are unchanged from Phase 9; this pass
- * only swaps the chrome (shell, felt table, brand chips, playing cards, seat
- * pips, brand surfaces) so visual parity lands before the stats phase.
- */
 @Composable
 fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     var handSeed by remember { mutableStateOf(nowEpochMs()) }
     var deck by remember(handSeed) { mutableStateOf(Deck(seed = handSeed)) }
+    val configuredOpponents = settings.multiwayOpponents
     var table by remember(handSeed) {
         mutableStateOf(
             MultiwayEngine.newHand(
                 heroPosition = Position.entries.random(kotlin.random.Random(handSeed)),
-                opponents = 3,
+                opponents = configuredOpponents,
                 deck = deck,
                 rng = kotlin.random.Random(handSeed),
             ),
@@ -111,6 +118,9 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     }
     var outcome by remember(handSeed) { mutableStateOf<ShowdownOutcome?>(null) }
     var userChoice by remember(handSeed) { mutableStateOf<Pair<Action, Int>?>(null) }
+
+    var equityPct by remember(handSeed) { mutableStateOf<Double?>(null) }
+    var outs by remember(handSeed) { mutableStateOf<OutsReport?>(null) }
 
     var situationTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
     var evaluationTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
@@ -122,8 +132,13 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     var errorEvaluation by remember(handSeed) { mutableStateOf<String?>(null) }
     var errorRecap by remember(handSeed) { mutableStateOf<String?>(null) }
 
+    // Per-street gating so each coach slot fires at most once.
     var situationFor by remember(handSeed) { mutableStateOf<Street?>(null) }
     var recapFor by remember(handSeed) { mutableStateOf<Street?>(null) }
+    // The street whose A-slot has been unlocked for display. A runs in the
+    // background before submit, but the user doesn't see it until they've
+    // submitted their own action for the same street.
+    var revealedFor by remember(handSeed) { mutableStateOf<Street?>(null) }
 
     var activeTab by remember(handSeed) { mutableStateOf(0) }
 
@@ -143,9 +158,15 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 ChatTurn.Role.USER,
                 Prompts.holdemUser(
                     table = forTable,
-                    equityPct = null,
+                    equityPct = equityPct,
                     preflopBaseline = null,
-                    outs = null,
+                    outs = outs,
+                    madeHand = if (forTable.board.size >= 3)
+                        HandEvaluator.evaluate((forTable.hero.cards ?: emptyList()) + forTable.board).category
+                    else null,
+                    draws = if (forTable.board.size in 3..4)
+                        Draws.detect(forTable.hero.cards ?: emptyList(), forTable.board)
+                    else emptyList(),
                     userChoice = null,
                     mode = Prompts.MultiwayAnalysisMode.SITUATION,
                 ),
@@ -180,9 +201,15 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 ChatTurn.Role.USER,
                 Prompts.holdemUser(
                     table = forTable,
-                    equityPct = null,
+                    equityPct = equityPct,
                     preflopBaseline = null,
-                    outs = null,
+                    outs = outs,
+                    madeHand = if (forTable.board.size >= 3)
+                        HandEvaluator.evaluate((forTable.hero.cards ?: emptyList()) + forTable.board).category
+                    else null,
+                    draws = if (forTable.board.size in 3..4)
+                        Draws.detect(forTable.hero.cards ?: emptyList(), forTable.board)
+                    else emptyList(),
                     userChoice = choice,
                     mode = Prompts.MultiwayAnalysisMode.EVALUATION,
                 ),
@@ -217,9 +244,9 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 ChatTurn.Role.USER,
                 Prompts.holdemUser(
                     table = snapshot,
-                    equityPct = null,
+                    equityPct = equityPct,
                     preflopBaseline = null,
-                    outs = null,
+                    outs = outs,
                     userChoice = userChoice,
                     mode = Prompts.MultiwayAnalysisMode.STREET_RECAP,
                 ),
@@ -275,6 +302,26 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         table = MultiwayEngine.stepUntilHero(current, rng = kotlin.random.Random.Default)
     }
 
+    // Equity + outs recompute on street / board / hero change. Multiway Equity
+    // factors in the live opponent count.
+    LaunchedEffect(table.street, table.board, handSeed) {
+        val heroCards = table.hero.cards ?: return@LaunchedEffect
+        val liveOpps = table.seats.count { !it.isHero && it.isLive }.coerceAtLeast(1)
+        equityPct = withContext(Dispatchers.Default) {
+            Equity.monteCarlo(
+                hero = heroCards,
+                board = table.board,
+                opponents = liveOpps,
+                trials = 1200,
+            ).combinedPct
+        }
+        outs = if (table.board.size in 3..4) {
+            withContext(Dispatchers.Default) { Outs.count(heroCards, table.board) }
+        } else null
+    }
+
+    // Background Situation runs on hero's first turn of the street, but the
+    // result stays hidden in the A tab until the hero submits.
     LaunchedEffect(table.isHeroTurn, table.street, handSeed) {
         if (table.isHeroTurn && situationFor != table.street) {
             situationFor = table.street
@@ -319,13 +366,11 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 heroStackAfter = table.hero.stack,
             ),
         )
+        revealedFor = snapForEval.street
         scope.launch { runEvaluation(snapForEval, choice) }
         activeTab = 1
     }
 
-    // Back-fill hand result onto every decision event for this hand once the
-    // outcome is known. Guarded by resultRecordedFor so a recompose after the
-    // update doesn't rewrite the same events.
     LaunchedEffect(outcome, handSeed) {
         val o = outcome ?: return@LaunchedEffect
         if (resultRecordedFor == handSeed) return@LaunchedEffect
@@ -345,37 +390,38 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
 
     WithDeviceMode { mode ->
         val isPhone = mode == DeviceMode.Phone
+
+        val bottomBar: @Composable () -> Unit = {
+            MultiwayBottomBar(
+                table = table,
+                outcome = outcome,
+                onSubmit = ::submitAction,
+                onNewHand = ::startNewHand,
+            )
+        }
+
         val body: @Composable () -> Unit = {
-            val maxW = if (isPhone) Modifier.fillMaxWidth() else Modifier.widthIn(max = 860.dp)
+            val maxW = if (isPhone) Modifier.fillMaxWidth() else Modifier.widthIn(max = 900.dp)
             Column(
                 Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .padding(
-                        horizontal = if (isPhone) 14.dp else 28.dp,
-                        vertical = if (isPhone) 12.dp else 20.dp,
+                        horizontal = if (isPhone) 14.dp else 24.dp,
+                        vertical = if (isPhone) 12.dp else 18.dp,
                     ),
             ) {
-                Column(maxW, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    FeltBlock(table = table, outcome = outcome)
-                    HistoryBlock(table = table)
+                Column(maxW, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TableStrip(
+                        table = table,
+                        equityPct = equityPct,
+                        outs = outs,
+                    )
+                    SeatsStrip(table = table)
                     if (outcome != null) {
                         OutcomeBlock(outcome!!, table)
-                        Button(
-                            onClick = ::startNewHand,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("开始下一手") }
-                    } else if (table.isHeroTurn) {
-                        HeroActionBlock(table = table, onAction = ::submitAction)
-                    } else {
-                        BrandSurface {
-                            Text(
-                                "等待其他玩家行动…",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = BrandTheme.colors.fgMuted,
-                            )
-                        }
                     }
+                    HistoryBlock(table = table)
                     CoachTabsBlock(
                         activeTab = activeTab,
                         onTab = { activeTab = it },
@@ -388,17 +434,21 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                         errorSituation = errorSituation,
                         errorEvaluation = errorEvaluation,
                         errorRecap = errorRecap,
+                        situationRevealed = revealedFor == table.street || outcome != null,
                     )
+                    // Spacer so the last card isn't hidden under the pinned bar.
+                    Spacer(Modifier.height(72.dp))
                 }
             }
         }
         val topRight: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
+            BrandChip(
+                "${configuredOpponents} 对手",
+                tone = ChipTone.Outline,
+            )
+            if (loadingSituation) BrandChip("AI 预载", tone = ChipTone.Accent)
             FilledTonalButton(onClick = ::startNewHand) {
-                Icon(
-                    Icons.Filled.Refresh,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                )
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.size(6.dp))
                 Text("新牌局")
             }
@@ -411,6 +461,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 title = title,
                 onBack = onBack,
                 topRight = topRight,
+                bottomBar = bottomBar,
                 body = body,
             )
         } else {
@@ -420,164 +471,212 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 windowLabel = "LLM Card Trainer · Multiway",
                 onBack = onBack,
                 topRight = topRight,
+                bottomBar = bottomBar,
                 body = body,
             )
         }
     }
 }
 
+/**
+ * Dense felt strip: board + hero + stat row (pot / to-call / equity / pot
+ * odds / made hand / outs). Modeled on PokerScreen.TableCardStrip so the
+ * multiway screen feels like its sibling.
+ */
 @Composable
-private fun FeltBlock(table: MultiwayTable, outcome: ShowdownOutcome?) {
-    FeltSurface(
-        modifier = Modifier.fillMaxWidth(),
+private fun TableStrip(
+    table: MultiwayTable,
+    equityPct: Double?,
+    outs: OutsReport?,
+) {
+    val c = BrandTheme.colors
+    val ivory = Color(0xFFFFFAED)
+    val ink = Color(0xFF0A0A0A)
+    val outer = RoundedCornerShape(14.dp)
+    val inner = RoundedCornerShape(10.dp)
+    val streetLabel = when (table.street) {
+        Street.PREFLOP -> "PREFLOP"
+        Street.FLOP -> "FLOP"
+        Street.TURN -> "TURN"
+        Street.RIVER -> "RIVER"
+        Street.SHOWDOWN -> "SHOWDOWN"
+    }
+    val heroCards = table.hero.cards ?: emptyList()
+    val madeHand = if (table.board.size >= 3 && heroCards.size == 2)
+        HandEvaluator.evaluate(heroCards + table.board).category.displayName
+    else null
+    val potOddsPct = if (table.heroToCall > 0)
+        kotlin.math.round(table.heroToCall.toDouble() / (table.pot + table.heroToCall) * 1000) / 10
+    else null
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(outer)
+            .background(ink)
+            .border(1.dp, Color.White.copy(alpha = 0.10f), outer)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(
-            modifier = Modifier
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "$streetLabel · POT ${table.pot}",
+                style = TextStyle(
+                    fontFamily = BrandMonoFamily,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = c.accentBright,
+                    letterSpacing = 1.8.sp,
+                ),
+            )
+            Spacer(Modifier.weight(1f))
+            val liveOpps = table.seats.count { !it.isHero && it.isLive }
+            BrandChip("${table.hero.position.label} · $liveOpps 对手", tone = ChipTone.Felt)
+        }
+        // Board + hero in a felt panel
+        Row(
+            Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .clip(inner)
+                .background(
+                    Brush.verticalGradient(0f to c.table, 1f to c.tableDeep),
+                )
+                .border(1.dp, Color.White.copy(alpha = 0.08f), inner)
+                .padding(horizontal = 10.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        "MULTIWAY",
-                        style = TextStyle(
-                            fontFamily = BrandMonoFamily,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 1.4.sp,
-                            color = androidx.compose.ui.graphics.Color(0xFFFFFAED).copy(alpha = 0.65f),
-                        ),
-                    )
-                    Text(
-                        streetLabel(table.street),
-                        style = TextStyle(
-                            fontFamily = BrandBodyFamily,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = androidx.compose.ui.graphics.Color(0xFFFFFAED),
-                        ),
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    BrandChip("底池 ${table.pot}", tone = ChipTone.Felt)
-                    if (table.isHeroTurn) {
-                        BrandChip("你行动", tone = ChipTone.Accent)
-                    } else {
-                        val actorLabel = table.seats.getOrNull(table.toActIndex)?.position?.label ?: "—"
-                        BrandChip("轮 $actorLabel", tone = ChipTone.Felt)
-                    }
-                }
-            }
-
-            // Board row
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val slots = 5
-                val revealed = table.board
-                for (i in 0 until slots) {
-                    val c = revealed.getOrNull(i)
-                    if (c != null) {
-                        PlayingCardView(
-                            rank = c.rank.label,
-                            suit = c.suit.symbol,
-                            size = CardSize.Default,
-                        )
-                    } else {
-                        PlayingCardView(
-                            rank = "",
-                            suit = "",
-                            size = CardSize.Default,
-                            slot = true,
-                        )
-                    }
-                }
-            }
-
-            // Seat row (compact)
-            val seatedOrder = table.seats.filterIndexed { idx, seat ->
-                seat.isHero || seat.state != SeatState.FOLDED || seat.totalContrib > 0 || idx == table.toActIndex
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                seatedOrder.forEach { seat ->
-                    val idx = table.seats.indexOf(seat)
-                    val active = idx == table.toActIndex
-                    val label = seat.position.label
-                    SeatPip(
-                        label = label,
-                        active = active,
-                        folded = seat.state == SeatState.FOLDED,
-                        bet = seat.contribThisStreet.takeIf { it > 0 },
-                    )
-                }
-            }
-
-            // Hero hand
-            val hero = table.hero
-            val heroCards = hero.cards
             Column(
-                horizontalAlignment = Alignment.Start,
+                Modifier.weight(5f),
+                horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Eyebrow("你的手牌 · ${hero.position.label}")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (heroCards != null) {
-                        heroCards.forEach { card ->
-                            PlayingCardView(
-                                rank = card.rank.label,
-                                suit = card.suit.symbol,
-                                size = CardSize.Large,
-                            )
-                        }
+                FeltEyebrow("BOARD", c.accentBright)
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    table.board.forEach {
+                        PlayingCardView(
+                            rank = it.rank.label,
+                            suit = it.suit.symbol,
+                            size = CardSize.Small,
+                        )
                     }
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    StatReadout(label = "栈", value = hero.stack.toString())
-                    StatReadout(label = "跟注", value = if (table.heroToCall == 0) "—" else table.heroToCall.toString())
-                    StatReadout(label = "已投", value = hero.totalContrib.toString())
+                    repeat(5 - table.board.size) {
+                        PlayingCardView(rank = "", suit = "", size = CardSize.Small, slot = true)
+                    }
                 }
             }
-
-            // Showdown reveal of other seats
-            if (outcome != null) {
-                BrandDivider()
-                Eyebrow("所有摊牌")
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    table.seats.forEach { seat ->
-                        if (!seat.isLive || seat.cards == null) return@forEach
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                seat.position.label + if (seat.isHero) "(你)" else "",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = androidx.compose.ui.graphics.Color(0xFFFFFAED),
-                                modifier = Modifier.size(60.dp, 20.dp),
-                            )
-                            seat.cards!!.forEach { card ->
-                                PlayingCardView(
-                                    rank = card.rank.label,
-                                    suit = card.suit.symbol,
-                                    size = CardSize.Small,
-                                )
-                            }
-                        }
+            Box(
+                Modifier
+                    .size(width = 1.dp, height = 66.dp)
+                    .background(Color.White.copy(alpha = 0.12f)),
+            )
+            Column(
+                Modifier.weight(2f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                FeltEyebrow("HERO", c.accentBright)
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    heroCards.forEach {
+                        PlayingCardView(
+                            rank = it.rank.label,
+                            suit = it.suit.symbol,
+                            size = CardSize.Small,
+                        )
                     }
                 }
+            }
+        }
+        // Stat row
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FeltStat("底池", table.pot.toString(), ivory)
+            FeltStat("跟注", if (table.heroToCall == 0) "—" else table.heroToCall.toString(), ivory)
+            FeltStat("栈", table.hero.stack.toString(), ivory)
+            if (equityPct != null) {
+                val r = kotlin.math.round(equityPct * 10) / 10
+                FeltStat("胜率", "$r%", c.accentBright, big = true)
+            }
+            if (potOddsPct != null) {
+                FeltStat("赔率阈值", "$potOddsPct%", ivory)
+            }
+            if (madeHand != null) {
+                FeltStat("现牌型", madeHand, ivory)
+            }
+            if (outs != null) {
+                FeltStat(
+                    "Outs",
+                    "${outs.outs} (${kotlin.math.round(outs.turnAndRiverPct * 10) / 10}%)",
+                    ivory,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeltEyebrow(text: String, color: Color) {
+    Text(
+        text,
+        style = TextStyle(
+            fontFamily = BrandMonoFamily,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = color,
+            letterSpacing = 1.6.sp,
+        ),
+    )
+}
+
+@Composable
+private fun FeltStat(label: String, value: String, valueColor: Color, big: Boolean = false) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            label,
+            style = TextStyle(
+                fontFamily = BrandMonoFamily,
+                fontSize = 9.5.sp,
+                color = Color.White.copy(alpha = 0.55f),
+                letterSpacing = 1.4.sp,
+            ),
+        )
+        Text(
+            value,
+            style = TextStyle(
+                fontFamily = BrandMonoFamily,
+                fontSize = if (big) 20.sp else 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = valueColor,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun SeatsStrip(table: MultiwayTable) {
+    val sorted = table.seats.filter {
+        it.isHero || it.state != SeatState.FOLDED || it.totalContrib > 0
+    }
+    if (sorted.isEmpty()) return
+    BrandSurface {
+        Eyebrow("座位")
+        Spacer(Modifier.height(8.dp))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            sorted.forEach { seat ->
+                val idx = table.seats.indexOf(seat)
+                SeatPip(
+                    label = seat.position.label + if (seat.isHero) "·你" else "",
+                    active = idx == table.toActIndex,
+                    folded = seat.state == SeatState.FOLDED,
+                    bet = seat.contribThisStreet.takeIf { it > 0 },
+                )
             }
         }
     }
@@ -640,57 +739,35 @@ private fun OutcomeBlock(outcome: ShowdownOutcome, table: MultiwayTable) {
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun HeroActionBlock(table: MultiwayTable, onAction: (Action, Int) -> Unit) {
-    val toCall = table.heroToCall
-    val pot = table.pot
-    val stack = table.hero.stack
-    BrandSurface(tone = ChipTone.Accent) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Eyebrow(if (toCall == 0) "行动 · 无需跟注" else "行动 · 跟注 $toCall")
-                Text(
-                    "${table.hero.position.label} · 栈 $stack",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = BrandTheme.colors.fg,
-                )
-            }
-            BrandChip("底池 $pot", tone = ChipTone.Outline)
-        }
-        Spacer(Modifier.height(10.dp))
-        androidx.compose.foundation.layout.FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (toCall == 0) {
-                Button(onClick = { onAction(Action.CHECK, 0) }) { Text("过牌") }
-                OutlinedButton(onClick = {
-                    val to = (pot / 2).coerceAtLeast(table.currentBet + 1).coerceAtMost(stack)
-                    onAction(Action.BET, to)
-                }) { Text("下注 1/2p") }
-                OutlinedButton(onClick = {
-                    val to = pot.coerceAtLeast(table.currentBet + 1).coerceAtMost(stack)
-                    onAction(Action.BET, to)
-                }) { Text("下注 pot") }
-            } else {
-                OutlinedButton(onClick = { onAction(Action.FOLD, 0) }) { Text("弃牌") }
-                Button(onClick = { onAction(Action.CALL, toCall) }) { Text("跟注 $toCall") }
-                OutlinedButton(onClick = {
-                    val to = (table.currentBet * 3)
-                        .coerceAtLeast(table.currentBet + table.lastRaiseSize)
-                        .coerceAtMost(table.hero.contribThisStreet + stack)
-                    onAction(Action.RAISE, to)
-                }) { Text("加注 3x") }
-            }
-            if (stack > 0) {
-                OutlinedButton(onClick = { onAction(Action.ALL_IN, 0) }) { Text("全下") }
+        // Reveal all remaining seats' hands
+        val revealed = table.seats.filter { it.isLive && it.cards != null }
+        if (revealed.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            BrandDivider()
+            Spacer(Modifier.height(6.dp))
+            Eyebrow("所有摊牌")
+            Spacer(Modifier.height(6.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                revealed.forEach { seat ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            seat.position.label + if (seat.isHero) "(你)" else "",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = BrandTheme.colors.fg,
+                            modifier = Modifier.width(56.dp),
+                        )
+                        seat.cards!!.forEach { card ->
+                            PlayingCardView(
+                                rank = card.rank.label,
+                                suit = card.suit.symbol,
+                                size = CardSize.XS,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -709,6 +786,7 @@ private fun CoachTabsBlock(
     errorSituation: String?,
     errorEvaluation: String?,
     errorRecap: String?,
+    situationRevealed: Boolean,
 ) {
     BrandSurface {
         Eyebrow("AI 教练 · 三视角")
@@ -720,12 +798,21 @@ private fun CoachTabsBlock(
         }
         Spacer(Modifier.height(10.dp))
         when (activeTab) {
-            0 -> CoachPane(
-                turns = situationTurns,
-                loading = loadingSituation,
-                error = errorSituation,
-                emptyHint = "等待轮到你，或本街情境分析加载中…",
-            )
+            0 -> if (!situationRevealed) {
+                Text(
+                    if (loadingSituation) "AI 情境已开始预载 · 提交本街动作后揭晓。"
+                    else "提交本街动作后揭晓 AI 情境分析。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BrandTheme.colors.fgMuted,
+                )
+            } else {
+                CoachPane(
+                    turns = situationTurns,
+                    loading = loadingSituation,
+                    error = errorSituation,
+                    emptyHint = "本街情境加载中…",
+                )
+            }
             1 -> CoachPane(
                 turns = evaluationTurns,
                 loading = loadingEvaluation,
@@ -760,10 +847,7 @@ private fun CoachPane(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp,
-            )
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             Text("分析中…", style = MaterialTheme.typography.bodySmall, color = BrandTheme.colors.fgMuted)
         }
         assistant != null -> Text(
@@ -775,6 +859,236 @@ private fun CoachPane(
             emptyHint,
             style = MaterialTheme.typography.bodySmall,
             color = BrandTheme.colors.fgMuted,
+        )
+    }
+}
+
+/**
+ * Bottom chrome. On hero's turn an action sheet with defensive buttons +
+ * sizing chips sits above a pinned action bar ("新牌局"). When the hand is
+ * resolved we just show a prominent "开始下一手". Otherwise the bar carries
+ * a pinned "新牌局" as a quick escape hatch.
+ */
+@Composable
+private fun MultiwayBottomBar(
+    table: MultiwayTable,
+    outcome: ShowdownOutcome?,
+    onSubmit: (Action, Int) -> Unit,
+    onNewHand: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        if (outcome == null && table.isHeroTurn) {
+            MultiwayActionSheet(table = table, onSubmit = onSubmit)
+        }
+        PinnedActionBar {
+            if (outcome != null) {
+                Spacer(Modifier.weight(1f))
+                Button(onClick = onNewHand) { Text("开始下一手") }
+            } else {
+                if (!table.isHeroTurn) {
+                    Text(
+                        "等待 ${table.seats.getOrNull(table.toActIndex)?.position?.label ?: "…"} 行动",
+                        color = BrandTheme.colors.fgMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                OutlinedButton(onClick = onNewHand) { Text("新牌局") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MultiwayActionSheet(
+    table: MultiwayTable,
+    onSubmit: (Action, Int) -> Unit,
+) {
+    val c = BrandTheme.colors
+    val toCall = table.heroToCall
+    val pot = table.pot
+    val stack = table.hero.stack
+    val isPreflop = table.board.isEmpty()
+    val contribThisStreet = table.hero.contribThisStreet
+
+    data class Preset(val action: Action, val amount: Int, val label: String)
+
+    val defensive = buildList {
+        if (toCall == 0) {
+            add(Preset(Action.CHECK, 0, "过牌"))
+        } else {
+            add(Preset(Action.FOLD, 0, "弃牌"))
+            add(Preset(Action.CALL, toCall, "跟注 $toCall"))
+        }
+        if (stack > 0) add(Preset(Action.ALL_IN, 0, "全下 $stack"))
+    }
+    val sizings = buildList<Preset> {
+        val minRaiseTo = table.currentBet + table.lastRaiseSize.coerceAtLeast(2)
+        if (toCall == 0) {
+            if (isPreflop) {
+                // 2.5bb / 3bb / 4bb
+                add(Preset(Action.BET, 5.coerceAtMost(stack), "2.5bb"))
+                add(Preset(Action.BET, 6.coerceAtMost(stack), "3bb"))
+                add(Preset(Action.BET, 8.coerceAtMost(stack), "4bb"))
+            } else {
+                add(Preset(Action.BET, (pot / 3).coerceAtLeast(1).coerceAtMost(stack), "1/3p"))
+                add(Preset(Action.BET, (pot / 2).coerceAtLeast(1).coerceAtMost(stack), "1/2p"))
+                add(Preset(Action.BET, (pot * 2 / 3).coerceAtLeast(1).coerceAtMost(stack), "2/3p"))
+                add(Preset(Action.BET, pot.coerceAtLeast(1).coerceAtMost(stack), "pot"))
+            }
+        } else {
+            val contribPlusStack = contribThisStreet + stack
+            add(
+                Preset(
+                    Action.RAISE,
+                    (table.currentBet * 2).coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack),
+                    "2x",
+                ),
+            )
+            add(
+                Preset(
+                    Action.RAISE,
+                    ((table.currentBet * 5 + 1) / 2).coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack),
+                    "2.5x",
+                ),
+            )
+            add(
+                Preset(
+                    Action.RAISE,
+                    (table.currentBet * 3).coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack),
+                    "3x",
+                ),
+            )
+            add(
+                Preset(
+                    Action.RAISE,
+                    ((pot + toCall) + toCall).coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack),
+                    "pot",
+                ),
+            )
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(c.surface)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            defensive.forEach { p ->
+                SheetButton(
+                    label = p.label,
+                    selected = false,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        val amt = if (p.action == Action.ALL_IN) 0 else p.amount
+                        onSubmit(p.action, amt)
+                    },
+                )
+            }
+        }
+        if (sizings.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    if (toCall == 0) "下注" else "加注",
+                    modifier = Modifier.width(36.dp),
+                    style = TextStyle(
+                        fontFamily = BrandDisplayFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = c.fgMuted,
+                    ),
+                )
+                sizings.forEach { p ->
+                    SheetChip(
+                        label = p.label,
+                        selected = false,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onSubmit(p.action, p.amount) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetButton(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val c = BrandTheme.colors
+    val shape = RoundedCornerShape(10.dp)
+    val bg = if (selected) {
+        Brush.verticalGradient(0f to c.accentBright, 1f to c.accent)
+    } else {
+        SolidColor(c.fg.copy(alpha = 0.06f))
+    }
+    val borderColor = if (selected) c.accent.copy(alpha = 0.7f) else c.border
+    val labelColor = if (selected) c.fg else c.fgMuted
+    Box(
+        modifier
+            .clip(shape)
+            .background(bg)
+            .border(1.dp, borderColor, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = TextStyle(
+                fontFamily = BrandDisplayFamily,
+                fontSize = 14.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                color = labelColor,
+            ),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun SheetChip(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val c = BrandTheme.colors
+    val shape = RoundedCornerShape(999.dp)
+    val bg = if (selected) c.accent.copy(alpha = 0.18f) else c.fg.copy(alpha = 0.06f)
+    val borderColor = if (selected) c.accent else c.border
+    val labelColor = if (selected) c.fg else c.fgMuted
+    Box(
+        modifier
+            .clip(shape)
+            .background(bg)
+            .border(1.dp, borderColor, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = TextStyle(
+                fontFamily = BrandMonoFamily,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = labelColor,
+            ),
+            maxLines = 1,
         )
     }
 }

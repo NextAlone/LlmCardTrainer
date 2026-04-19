@@ -222,13 +222,14 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
 @Composable
 private fun EngineToggle(settings: AppSettings) {
     var enabled by remember { mutableStateOf(settings.multiwayEngineEnabled) }
+    var opponents by remember { mutableStateOf(settings.multiwayOpponents) }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
             Text("德扑引擎（实验）", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.size(6.dp))
             Text(
-                "默认引擎为单 villain 脚本；开启后改用新版多人引擎（range 决策、多家摊牌、边池）。" +
-                    "新引擎目前不含 AI 教练与胜率分析，仅提供可玩的对局。",
+                "默认引擎为单 villain 脚本；开启后改用新版多人引擎（range 决策、" +
+                    "多家摊牌、边池、三视角 AI 分析）。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.size(8.dp))
@@ -240,6 +241,21 @@ private fun EngineToggle(settings: AppSettings) {
                 },
                 label = { Text(if (enabled) "新引擎（已启用）" else "启用新引擎") },
             )
+            Spacer(Modifier.size(10.dp))
+            Text("桌面对手数（hero 加上这些人）", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.size(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (n in 1..5) {
+                    FilterChip(
+                        selected = opponents == n,
+                        onClick = {
+                            opponents = n
+                            settings.multiwayOpponents = n
+                        },
+                        label = { Text("$n 对手") },
+                    )
+                }
+            }
         }
     }
 }
