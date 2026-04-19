@@ -120,12 +120,24 @@ private fun PokerStatsContent(
         ),
     )
 
+    MetricsCard(
+        title = "胜负结算",
+        rows = listOf(
+            "胜率（含弃牌迫使）" to "${s.winRate}%",
+            "平均蒙特卡洛胜率" to "${s.avgEquityPct}%",
+            "我弃牌比例" to "${s.foldRate}%",
+            "逼对手弃牌比例" to "${s.villainFoldRate}%",
+            "走到摊牌比例" to "${s.showdownRate}%",
+        ),
+    )
+
     if (s.recentWindow.size >= 2) {
         TrendCard(
-            title = "20 手滚动趋势：VPIP (蓝) · PFR (绿)",
+            title = "20 手滚动趋势：VPIP (蓝) · PFR (绿) · 胜率 (红)",
             series = listOf(
                 s.recentWindow.map { it.vpip } to Color(0xFF1E5AA8),
                 s.recentWindow.map { it.pfr } to Color(0xFF0E7C3A),
+                s.recentWindow.map { it.winRate } to Color(0xFFB00020),
             ),
             yMax = 100.0,
         )
