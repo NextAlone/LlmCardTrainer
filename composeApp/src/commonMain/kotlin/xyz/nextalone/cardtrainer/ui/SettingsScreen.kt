@@ -180,6 +180,8 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            EngineToggle(settings)
     }
 
     xyz.nextalone.cardtrainer.ui.components.WithDeviceMode { mode ->
@@ -212,6 +214,31 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                 windowLabel = "LLM Card Trainer · Settings",
                 onBack = onBack,
                 body = body,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EngineToggle(settings: AppSettings) {
+    var enabled by remember { mutableStateOf(settings.multiwayEngineEnabled) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text("德扑引擎（实验）", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.size(6.dp))
+            Text(
+                "默认引擎为单 villain 脚本；开启后改用新版多人引擎（range 决策、多家摊牌、边池）。" +
+                    "新引擎目前不含 AI 教练与胜率分析，仅提供可玩的对局。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.size(8.dp))
+            FilterChip(
+                selected = enabled,
+                onClick = {
+                    enabled = !enabled
+                    settings.multiwayEngineEnabled = enabled
+                },
+                label = { Text(if (enabled) "新引擎（已启用）" else "启用新引擎") },
             )
         }
     }

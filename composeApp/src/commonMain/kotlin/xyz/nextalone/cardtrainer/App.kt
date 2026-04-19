@@ -24,6 +24,7 @@ import xyz.nextalone.cardtrainer.storage.AppSettings
 import xyz.nextalone.cardtrainer.storage.provideSettings
 import xyz.nextalone.cardtrainer.ui.HomeScreen
 import xyz.nextalone.cardtrainer.ui.MahjongScreen
+import xyz.nextalone.cardtrainer.ui.MultiwayPokerScreen
 import xyz.nextalone.cardtrainer.ui.PokerScreen
 import xyz.nextalone.cardtrainer.ui.SettingsScreen
 import xyz.nextalone.cardtrainer.ui.StatsScreen
@@ -76,10 +77,17 @@ fun App(darkTheme: Boolean = isSystemInDarkTheme()) {
                                 settings = settings,
                                 onNav = { route = it },
                             )
-                            Route.Poker -> PokerScreen(
-                                settings = settings,
-                                onBack = { route = Route.Home },
-                            )
+                            Route.Poker -> if (settings.multiwayEngineEnabled) {
+                                MultiwayPokerScreen(
+                                    settings = settings,
+                                    onBack = { route = Route.Home },
+                                )
+                            } else {
+                                PokerScreen(
+                                    settings = settings,
+                                    onBack = { route = Route.Home },
+                                )
+                            }
                             Route.Mahjong -> MahjongScreen(
                                 settings = settings,
                                 onBack = { route = Route.Home },
