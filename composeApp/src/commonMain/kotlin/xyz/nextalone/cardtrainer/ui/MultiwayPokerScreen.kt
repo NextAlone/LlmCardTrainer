@@ -1138,6 +1138,7 @@ private fun CoachTabsBlock(
                 loading = loadingEvaluation,
                 error = errorEvaluation,
                 emptyHint = "提交本街动作后，将评估你的选择。",
+                stripScore = true,
             )
             else -> CoachPane(
                 turns = recapTurns,
@@ -1155,8 +1156,10 @@ private fun CoachPane(
     loading: Boolean,
     error: String?,
     emptyHint: String,
+    stripScore: Boolean = false,
 ) {
-    val assistant = turns.lastOrNull { it.role == ChatTurn.Role.ASSISTANT }?.content
+    val raw = turns.lastOrNull { it.role == ChatTurn.Role.ASSISTANT }?.content
+    val assistant = if (raw != null && stripScore) stripLeadingScore(raw) else raw
     when {
         error != null -> Text(
             "⚠ $error",
@@ -1170,11 +1173,7 @@ private fun CoachPane(
             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             Text("分析中…", style = MaterialTheme.typography.bodySmall, color = BrandTheme.colors.fgMuted)
         }
-        assistant != null -> Text(
-            assistant,
-            style = MaterialTheme.typography.bodyMedium,
-            color = BrandTheme.colors.fg,
-        )
+        assistant != null -> AiMarkdown(assistant)
         else -> Text(
             emptyHint,
             style = MaterialTheme.typography.bodySmall,
@@ -1182,6 +1181,13 @@ private fun CoachPane(
         )
     }
 }
+
+// The B-slot reply begins with `【评分：X.X / 5】`; we already render that as
+// a coloured badge in the bottom bar, so strip it before Markdown to avoid
+// duplication. Same regex as PokerCoachMerged's private scorePattern.
+private val multiwayScorePattern = Regex("""【评分[:：]\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*5】""")
+private fun stripLeadingScore(text: String): String =
+    text.replaceFirst(multiwayScorePattern, "").trimStart('\n', ' ').trimEnd()
 
 /**
  * Bottom chrome. On hero's turn an action sheet with defensive buttons +
