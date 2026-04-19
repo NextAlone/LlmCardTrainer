@@ -142,9 +142,11 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
 
     var activeTab by remember(handSeed) { mutableStateOf(0) }
 
-    // Per-street B-score (parsed from the evaluation assistant reply) so the
-    // bottom bar can show 翻前 / 翻后 / 转牌 / 河牌 badges side-by-side.
-    var scoreByStreet by remember(handSeed) { mutableStateOf<Map<Street, Double>>(emptyMap()) }
+    // Per-street B-scores. If the hero acts multiple times on the same
+    // street (3-bet wars, check-raise, etc.) every submission contributes a
+    // separate score; the bottom badge shows the mean and the count so a
+    // single bad decision doesn't get hidden by one good one.
+    var scoreByStreet by remember(handSeed) { mutableStateOf<Map<Street, List<Double>>>(emptyMap()) }
 
     val statsRepo = remember { StatsRepository(settings) }
     var resultRecordedFor by remember { mutableStateOf<Long?>(null) }
@@ -226,7 +228,8 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             }
             evaluationTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
             parsePokerScore(reply)?.let { parsed ->
-                scoreByStreet = scoreByStreet + (forStreet to parsed)
+                val prior = scoreByStreet[forStreet].orEmpty()
+                scoreByStreet = scoreByStreet + (forStreet to (prior + parsed))
             }
         } catch (c: CancellationException) {
             throw c
@@ -1255,7 +1258,7 @@ private fun stripLeadingScore(text: String): String =
 private fun MultiwayBottomBar(
     table: MultiwayTable,
     outcome: ShowdownOutcome?,
-    scoreByStreet: Map<Street, Double>,
+    scoreByStreet: Map<Street, List<Double>>,
     onSubmit: (Action, Int) -> Unit,
     onNewHand: () -> Unit,
     onAdvanceStreet: () -> Unit,
@@ -1515,7 +1518,7 @@ private fun streetLabel(street: Street): String = when (street) {
  */
 @Composable
 private fun MultiwayScoreRow(
-    scoreByStreet: Map<Street, Double>,
+    scoreByStreet: Map<Street, List<Double>>,
     current: Street,
 ) {
     val streets = listOf(Street.PREFLOP, Street.FLOP, Street.TURN, Street.RIVER)
@@ -1530,7 +1533,7 @@ private fun MultiwayScoreRow(
         streets.forEach { s ->
             MultiwayScoreBadge(
                 label = streetLabel(s),
-                score = scoreByStreet[s],
+                scores = scoreByStreet[s].orEmpty(),
                 highlighted = s == current,
                 modifier = Modifier.weight(1f),
             )
@@ -1541,23 +1544,24 @@ private fun MultiwayScoreRow(
 @Composable
 private fun MultiwayScoreBadge(
     label: String,
-    score: Double?,
+    scores: List<Double>,
     highlighted: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val c = BrandTheme.colors
+    val avg = scores.takeIf { it.isNotEmpty() }?.average()
     val tint = when {
-        score == null -> c.fgSubtle
-        score >= 4.0 -> c.good
-        score >= 3.0 -> c.accent
-        score >= 2.0 -> c.warn
+        avg == null -> c.fgSubtle
+        avg >= 4.0 -> c.good
+        avg >= 3.0 -> c.accent
+        avg >= 2.0 -> c.warn
         else -> c.bad
     }
     val shape = RoundedCornerShape(999.dp)
     Row(
         modifier
             .clip(shape)
-            .background(tint.copy(alpha = if (score != null) 0.12f else 0.04f))
+            .background(tint.copy(alpha = if (avg != null) 0.12f else 0.04f))
             .border(
                 width = if (highlighted) 1.5.dp else 1.dp,
                 color = if (highlighted) c.accent.copy(alpha = 0.6f) else tint.copy(alpha = 0.5f),
@@ -1578,7 +1582,7 @@ private fun MultiwayScoreBadge(
         )
         Spacer(Modifier.width(4.dp))
         Text(
-            score?.let { (kotlin.math.round(it * 10) / 10).toString() } ?: "—",
+            avg?.let { (kotlin.math.round(it * 10) / 10).toString() } ?: "—",
             style = TextStyle(
                 fontFamily = BrandMonoFamily,
                 fontSize = 14.sp,
@@ -1586,7 +1590,7 @@ private fun MultiwayScoreBadge(
                 color = tint,
             ),
         )
-        if (score != null) {
+        if (avg != null) {
             Text(
                 "/5",
                 modifier = Modifier.padding(start = 2.dp),
@@ -1596,6 +1600,18 @@ private fun MultiwayScoreBadge(
                     color = c.fgSubtle,
                 ),
             )
+            if (scores.size > 1) {
+                Text(
+                    "×${scores.size}",
+                    modifier = Modifier.padding(start = 4.dp),
+                    style = TextStyle(
+                        fontFamily = BrandMonoFamily,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = c.fgMuted,
+                    ),
+                )
+            }
         }
     }
 }
