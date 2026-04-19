@@ -129,6 +129,62 @@ object Prompts {
     enum class MultiwayAnalysisMode { SITUATION, EVALUATION, STREET_RECAP }
 
     /**
+     * One hero submission on a street. Snapshot state is captured at submit
+     * time so the coach sees the real context the user faced — pot / toCall
+     * / action-history-so-far — rather than the post-street aggregate.
+     */
+    data class HeroStreetAction(
+        val potBefore: Int,
+        val toCall: Int,
+        val currentBet: Int,
+        val stack: Int,
+        val priorHistoryLine: String,
+        val action: Action,
+        val amount: Int,
+    )
+
+    /**
+     * Street-end multi-decision evaluation. The hero may have acted 1..N times
+     * on the street; we send every decision with its snapshot and require a
+     * distinct `【评分 i：X.X / 5】` line per decision so the client can show
+     * per-turn scores instead of a single aggregate.
+     */
+    fun holdemUserEvaluateStreet(
+        table: MultiwayTable,
+        actions: List<HeroStreetAction>,
+    ): String = buildString {
+        val hero = table.hero
+        val heroCards = hero.cards ?: error("hero must have cards")
+        append("【当前街】${table.street}\n")
+        append("【位置】${hero.position.label}，存活对手数：${table.seats.count { !it.isHero && it.isLive } }\n")
+        append("【手牌】${heroCards.joinToString(" ") { it.label }}\n")
+        if (table.board.isNotEmpty()) {
+            append("【公共牌】${table.board.joinToString(" ") { it.label }}\n")
+        }
+        append("【本街完整行动线】\n")
+        for (h in table.history.filter { it.street == table.street }) {
+            val who = h.actor?.label ?: "?"
+            val amt = if (h.amount > 0) " ${h.amount}" else ""
+            append("  - $who ${h.action.label}$amt\n")
+        }
+        append("【你的本街决策回放 · 共 ${actions.size} 次】\n")
+        actions.forEachIndexed { i, a ->
+            val n = i + 1
+            val historyFragment = a.priorHistoryLine.takeIf { it.isNotBlank() } ?: "（你是首个行动）"
+            val amtText = if (a.amount > 0) " ${a.amount}" else ""
+            append("  $n. 底池 ${a.potBefore} · 跟注 ${a.toCall} · 对手下注档 ${a.currentBet} · 剩余栈 ${a.stack}；当时行动线：$historyFragment；你选择 ${a.action.label}$amtText\n")
+        }
+        append("\n请对本街每次决策分别独立打分。输出规范（严格遵守，顺序与编号对应）：\n")
+        actions.indices.forEach { i ->
+            val n = i + 1
+            append("  【评分 $n：X.X / 5】（然后用 1-2 句中文评语说明该次决策的偏差或正确之处）\n")
+        }
+        append("评分档位与单次 EVALUATION 相同：5.0 与基线一致 / 4.x 方向正确 / 3.x 可接受 / 2.x EV 中度损失 / <2 严重错误。")
+        append("评语中如对比替代方案，请给出具体尺度（pot 百分比 或 bb）。")
+        append("本次不需要最终的总结 / 表格；每次决策单独一段即可。")
+    }
+
+    /**
      * Multiway overload. Differs from the heads-up prompt in how villain info
      * is framed: we enumerate every live opponent's position + remaining stack
      * and reconstruct the action line with per-seat actors so the coach can

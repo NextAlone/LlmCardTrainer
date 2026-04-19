@@ -135,6 +135,13 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     // Per-street gating so each coach slot fires at most once.
     var situationFor by remember(handSeed) { mutableStateOf<Street?>(null) }
     var recapFor by remember(handSeed) { mutableStateOf<Street?>(null) }
+    // Streets whose batched evaluation has already been sent.
+    var evaluationFor by remember(handSeed) { mutableStateOf<Set<Street>>(emptySet()) }
+    // Every hero submission on a given street, captured at submit-time so we
+    // can replay them to the coach when the street closes.
+    var heroSubmissionsByStreet by remember(handSeed) {
+        mutableStateOf<Map<Street, List<Prompts.HeroStreetAction>>>(emptyMap())
+    }
     // The street whose A-slot has been unlocked for display. A runs in the
     // background before submit, but the user doesn't see it until they've
     // submitted their own action for the same street.
@@ -194,7 +201,11 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         }
     }
 
-    suspend fun runEvaluation(forTable: MultiwayTable, choice: Pair<Action, Int>, forStreet: Street) {
+    suspend fun runStreetEvaluation(
+        snapshot: MultiwayTable,
+        submissions: List<Prompts.HeroStreetAction>,
+        forStreet: Street,
+    ) {
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
             errorEvaluation = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
@@ -205,20 +216,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         val seed = listOf(
             ChatTurn(
                 ChatTurn.Role.USER,
-                Prompts.holdemUser(
-                    table = forTable,
-                    equityPct = equityPct,
-                    preflopBaseline = null,
-                    outs = outs,
-                    madeHand = if (forTable.board.size >= 3)
-                        HandEvaluator.evaluate((forTable.hero.cards ?: emptyList()) + forTable.board).category
-                    else null,
-                    draws = if (forTable.board.size in 3..4)
-                        Draws.detect(forTable.hero.cards ?: emptyList(), forTable.board)
-                    else emptyList(),
-                    userChoice = choice,
-                    mode = Prompts.MultiwayAnalysisMode.EVALUATION,
-                ),
+                Prompts.holdemUserEvaluateStreet(snapshot, submissions),
             ),
         )
         val coach = LlmProviders.create(cfg)
@@ -227,9 +225,9 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
             evaluationTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
-            parsePokerScore(reply)?.let { parsed ->
-                val prior = scoreByStreet[forStreet].orEmpty()
-                scoreByStreet = scoreByStreet + (forStreet to (prior + parsed))
+            val parsed = parseMultiScores(reply, submissions.size)
+            if (parsed.isNotEmpty()) {
+                scoreByStreet = scoreByStreet + (forStreet to parsed)
             }
         } catch (c: CancellationException) {
             throw c
@@ -283,16 +281,27 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     // screen waits for the user to press '发下一街' so they have time to read
     // the A/B/C coach panes without them getting overwritten by the next
     // street's fresh analyses.
+    //
+    // On street-close we also fire the batched hero evaluation: every
+    // hero submission captured during the street is replayed to the coach
+    // in a single request so the model can produce per-decision scores.
     LaunchedEffect(table, handSeed) {
         val current = table
         if (MultiwayEngine.isHandOver(current)) {
             if (outcome == null) {
                 outcome = Showdown.run(current)
-                if (recapFor != current.street) {
-                    recapFor = current.street
-                    val snap = current
-                    scope.launch { runRecap(snap) }
-                }
+            }
+            if (recapFor != current.street) {
+                recapFor = current.street
+                val snap = current
+                scope.launch { runRecap(snap) }
+            }
+            val submissions = heroSubmissionsByStreet[current.street].orEmpty()
+            if (submissions.isNotEmpty() && current.street !in evaluationFor) {
+                evaluationFor = evaluationFor + current.street
+                val snap = current
+                val st = current.street
+                scope.launch { runStreetEvaluation(snap, submissions, st) }
             }
             return@LaunchedEffect
         }
@@ -302,6 +311,13 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 recapFor = current.street
                 val snap = current
                 scope.launch { runRecap(snap) }
+            }
+            val submissions = heroSubmissionsByStreet[current.street].orEmpty()
+            if (submissions.isNotEmpty() && current.street !in evaluationFor) {
+                evaluationFor = evaluationFor + current.street
+                val snap = current
+                val st = current.street
+                scope.launch { runStreetEvaluation(snap, submissions, st) }
             }
             return@LaunchedEffect
         }
@@ -366,6 +382,24 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         val handLabel = snapForEval.hero.cards?.let { PreflopChart.encode(it) } ?: ""
         val streetName = snapForEval.street.name
         val boardSize = snapForEval.board.size
+        val priorHistoryLine = snapForEval.history
+            .filter { it.street == snapForEval.street }
+            .joinToString(" · ") { rec ->
+                val actor = rec.actor?.label ?: "?"
+                val amt = if (rec.amount > 0) " ${rec.amount}" else ""
+                "$actor ${rec.action.label}$amt"
+            }
+        val submission = Prompts.HeroStreetAction(
+            potBefore = potBefore,
+            toCall = toCallBefore,
+            currentBet = currentBetBefore,
+            stack = snapForEval.hero.stack,
+            priorHistoryLine = priorHistoryLine,
+            action = action,
+            amount = amount,
+        )
+        heroSubmissionsByStreet = heroSubmissionsByStreet +
+            (snapForEval.street to (heroSubmissionsByStreet[snapForEval.street].orEmpty() + submission))
         table = MultiwayEngine.applyHeroAction(snapForEval, action, amount)
         statsRepo.recordMultiway(
             MultiwayDecisionEvent(
@@ -386,8 +420,6 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             ),
         )
         revealedFor = snapForEval.street
-        val evalStreet = snapForEval.street
-        scope.launch { runEvaluation(snapForEval, choice, evalStreet) }
         activeTab = 1
     }
 
@@ -1190,8 +1222,8 @@ private fun CoachTabsBlock(
                 turns = evaluationTurns,
                 loading = loadingEvaluation,
                 error = errorEvaluation,
-                emptyHint = "提交本街动作后，将评估你的选择。",
-                stripScore = true,
+                emptyHint = "本街结束时一次性给每次决策打分。",
+                stripScore = false,
             )
             else -> CoachPane(
                 turns = recapTurns,
@@ -1235,12 +1267,33 @@ private fun CoachPane(
     }
 }
 
-// The B-slot reply begins with `【评分：X.X / 5】`; we already render that as
-// a coloured badge in the bottom bar, so strip it before Markdown to avoid
-// duplication. Same regex as PokerCoachMerged's private scorePattern.
+// Legacy single-score pattern, kept for older tab-B replies produced before
+// the street-batched evaluation. The new prompt requires numbered scores
+// (【评分 N：X.X / 5】), which [multiwayNumberedScorePattern] captures.
 private val multiwayScorePattern = Regex("""【评分[:：]\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*5】""")
 private fun stripLeadingScore(text: String): String =
     text.replaceFirst(multiwayScorePattern, "").trimStart('\n', ' ').trimEnd()
+
+/**
+ * Parses `【评分 1：X.X / 5】` .. `【评分 N：X.X / 5】` out of a reply. Falls
+ * back to the single [multiwayScorePattern] if the model ignored the
+ * numbered format, and finally returns an empty list if nothing matched.
+ * Truncates to [expected] so one badge per submission.
+ */
+private val multiwayNumberedScorePattern =
+    Regex("""【评分\s*\d+\s*[:：]\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*5】""")
+
+fun parseMultiScores(reply: String, expected: Int): List<Double> {
+    val numbered = multiwayNumberedScorePattern.findAll(reply)
+        .mapNotNull {
+            it.groupValues.getOrNull(1)?.toDoubleOrNull()?.coerceIn(0.0, 5.0)
+        }
+        .toList()
+    if (numbered.isNotEmpty()) return numbered.take(expected)
+    val single = multiwayScorePattern.find(reply)
+        ?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.coerceIn(0.0, 5.0)
+    return if (single != null) listOf(single) else emptyList()
+}
 
 /**
  * Bottom chrome. On hero's turn an action sheet with defensive buttons +
