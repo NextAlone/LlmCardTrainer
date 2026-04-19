@@ -367,7 +367,11 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     }
 
     fun submitDecision() {
-        userChoice ?: return
+        val (act, amt) = userChoice ?: return
+        // Reflect the hero's action in the table state: pot, to-call, history
+        // all update. Otherwise '发下一街' would deal a turn card with the pot
+        // still at its pre-decision value.
+        table = trainer.applyAction(table, act, amt)
         phase = Phase.SUBMITTED
         scope.launch { runEvaluation() }
     }
@@ -528,6 +532,41 @@ private fun PreflopHistoryCard(table: HoldemTable) {
 }
 
 @Composable
+private fun PostflopStreetCard(table: HoldemTable) {
+    val streetLabel = when (table.street) {
+        Street.FLOP -> "翻牌"
+        Street.TURN -> "转牌"
+        Street.RIVER -> "河牌"
+        else -> table.street.name
+    }
+    val villainAction = table.history.lastOrNull { it.street == table.street }
+    val villainLine = when (villainAction?.action) {
+        Action.CHECK -> "对手（OOP） 过牌 check"
+        Action.BET -> "对手（OOP） 下注 ${villainAction.amount} chips"
+        Action.RAISE -> "对手（OOP） 加注到 ${villainAction.amount} chips"
+        else -> "对手尚未行动"
+    }
+    val youLine = if (table.toCall == 0) {
+        "你可过牌 / 下注（开池）"
+    } else {
+        "你需跟注 ${table.toCall} chips（底池赔率 ${kotlin.math.round(table.potOdds * 1000) / 10}%）"
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("${streetLabel}动作", fontWeight = FontWeight.SemiBold)
+            Text(villainLine, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "→ 现底池 ${table.pot} chips · $youLine",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun DecidingBlock(
     table: HoldemTable,
     userChoice: Pair<Action, Int>?,
@@ -541,11 +580,12 @@ private fun DecidingBlock(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    // Preflop action history — always shown so the user sees what every
-    // seat BEFORE them did on this hand (or 'first to act' for UTG), with
-    // the resulting pot and toCall.
+    // Street context: preflop shows what every seat did before the hero;
+    // post-flop shows the OOP villain's opening action for this street.
     if (table.street == Street.PREFLOP) {
         PreflopHistoryCard(table = table)
+    } else if (table.street != Street.SHOWDOWN) {
+        PostflopStreetCard(table = table)
     }
 
     val presets = remember(table.pot, table.toCall, table.heroStack, table.board) {

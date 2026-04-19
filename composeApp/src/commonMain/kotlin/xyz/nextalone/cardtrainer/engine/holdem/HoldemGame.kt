@@ -93,7 +93,20 @@ class HoldemTrainer(private val baseSeed: Long? = null) {
             Street.SHOWDOWN -> Street.SHOWDOWN
         }
         val newBoard = if (cardsToAdd > 0) table.board + deck.dealN(cardsToAdd) else table.board
-        return table.copy(street = next, board = newBoard, toCall = 0)
+        if (next == Street.SHOWDOWN) {
+            return table.copy(street = next, board = newBoard, toCall = 0)
+        }
+        // Post-flop: villain (OOP) acts first on the new street. Generate a
+        // plausible scripted line so the hero sees 'opponent checked' or
+        // 'opponent bet ½ pot' before deciding.
+        val villain = PostflopVillain.act(street = next, potAtStreetStart = table.pot)
+        return table.copy(
+            street = next,
+            board = newBoard,
+            pot = villain.pot,
+            toCall = villain.toCall,
+            history = table.history + villain.records,
+        )
     }
 
     /**
