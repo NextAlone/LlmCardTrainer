@@ -5,6 +5,7 @@ import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.plugins.ServerResponseException
 import io.ktor.client.statement.bodyAsText
+import kotlin.coroutines.cancellation.CancellationException
 
 sealed interface TestResult {
     data class Ok(val sample: String) : TestResult
@@ -52,6 +53,8 @@ suspend fun testConnection(cfg: ProviderConfig): TestResult {
         )
     } catch (e: ResponseException) {
         TestResult.Fail("HTTP 错误（${e.response.status.value}）", sanitize(e.response.bodyAsText()))
+    } catch (c: CancellationException) {
+        throw c
     } catch (t: Throwable) {
         TestResult.Fail(t::class.simpleName ?: "未知异常", t.message)
     } finally {

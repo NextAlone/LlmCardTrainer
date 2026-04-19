@@ -68,6 +68,7 @@ import xyz.nextalone.cardtrainer.storage.loadMahjongSession
 import xyz.nextalone.cardtrainer.storage.saveMahjongSession
 import xyz.nextalone.cardtrainer.util.withRetry
 import androidx.compose.runtime.LaunchedEffect
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
 
 private typealias MjStep = MahjongSession.Step
@@ -180,6 +181,8 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                 }
                 adviceTurns = seedTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
                 adviceError = null
+            } catch (c: CancellationException) {
+                throw c
             } catch (t: Throwable) {
                 adviceError = t.message ?: t::class.simpleName ?: "未知错误"
             } finally {
@@ -205,6 +208,8 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                     coach.coach(systemPrompt = Prompts.MAHJONG_SYSTEM, messages = priorTurns)
                 }
                 adviceTurns = priorTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+            } catch (c: CancellationException) {
+                throw c
             } catch (t: Throwable) {
                 adviceError = t.message ?: t::class.simpleName ?: "未知错误"
             } finally {
