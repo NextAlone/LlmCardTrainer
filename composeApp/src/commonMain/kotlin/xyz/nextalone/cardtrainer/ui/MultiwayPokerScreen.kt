@@ -467,10 +467,9 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             }
         }
         val topRight: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
-            BrandChip(
-                "${configuredOpponents} 对手",
-                tone = ChipTone.Outline,
-            )
+            // Opponent count is already shown in the TableStrip header, so
+            // the top bar only carries transient AI state to avoid chip
+            // duplication.
             if (loadingSituation) BrandChip("AI 预载", tone = ChipTone.Accent)
         }
         val eyebrow = "HOLD'EM MULTIWAY · ${table.hero.position.label} · ${streetLabel(table.street)}"
