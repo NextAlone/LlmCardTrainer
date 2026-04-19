@@ -16,12 +16,14 @@ import xyz.nextalone.cardtrainer.ui.HomeScreen
 import xyz.nextalone.cardtrainer.ui.MahjongScreen
 import xyz.nextalone.cardtrainer.ui.PokerScreen
 import xyz.nextalone.cardtrainer.ui.SettingsScreen
+import xyz.nextalone.cardtrainer.ui.StatsScreen
 import xyz.nextalone.cardtrainer.util.PlatformBackHandler
 
 sealed class Route {
     data object Home : Route()
     data object Poker : Route()
     data object Mahjong : Route()
+    data object Stats : Route()
     data object Settings : Route()
 }
 
@@ -45,6 +47,7 @@ fun App(darkTheme: Boolean = false) {
                 Route.Home -> HomeScreen(
                     onOpenPoker = { route = Route.Poker },
                     onOpenMahjong = { route = Route.Mahjong },
+                    onOpenStats = { route = Route.Stats },
                     onOpenSettings = { route = Route.Settings },
                 )
                 Route.Poker -> PokerScreen(
@@ -52,6 +55,10 @@ fun App(darkTheme: Boolean = false) {
                     onBack = { route = Route.Home },
                 )
                 Route.Mahjong -> MahjongScreen(
+                    settings = settings,
+                    onBack = { route = Route.Home },
+                )
+                Route.Stats -> StatsScreen(
                     settings = settings,
                     onBack = { route = Route.Home },
                 )

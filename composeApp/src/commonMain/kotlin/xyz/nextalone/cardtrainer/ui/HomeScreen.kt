@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 fun HomeScreen(
     onOpenPoker: () -> Unit,
     onOpenMahjong: () -> Unit,
+    onOpenStats: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     Scaffold(
@@ -65,6 +66,11 @@ fun HomeScreen(
                     title = "四川麻将（血战到底）",
                     subtitle = "练习缺一门、向听判断与安全弃牌",
                     onClick = onOpenMahjong,
+                )
+                TrainerCard(
+                    title = "训练统计",
+                    subtitle = "VPIP / PFR / 引擎命中率 等行为指标，看变化趋势",
+                    onClick = onOpenStats,
                 )
                 Button(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
                     Text("AI 教练设置（Claude API Key）")

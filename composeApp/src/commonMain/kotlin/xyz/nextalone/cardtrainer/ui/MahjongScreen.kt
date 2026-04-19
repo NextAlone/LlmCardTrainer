@@ -113,6 +113,7 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
     }
     var loading by remember { mutableStateOf(false) }
     var showGlossary by remember { mutableStateOf(false) }
+    val stats = remember { xyz.nextalone.cardtrainer.stats.StatsRepository(settings) }
     val scope = rememberCoroutineScope()
 
     fun refreshHand() {
@@ -353,11 +354,37 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
                     onRetryAdvice = ::askCoach,
                     onFollowUpAdvice = ::followUpAdvice,
                     onDiscard = { tile ->
+                        // Before mutating the trainer, snapshot the engine's
+                        // best suggestion + current shanten so we can compare
+                        // user's choice and report top-1 match for stats.
+                        val priorShanten = HandCheck.shanten(trainer.hand, trainer.missing)
+                        val engineTop1 = if (trainer.hand.size == 14) {
+                            trainer.rankDiscards(limit = 1).firstOrNull()
+                        } else null
                         trainer.discard(tile)
                         // 3 bots draw+discard, then hero draws — this is the
                         // real 4-seat round structure.
                         trainer.runOpponentsAndDraw()
                         refreshHand()
+                        val afterShanten = HandCheck.shanten(trainer.hand, trainer.missing)
+                        val waits = UkeIre.waitingWithCounts(
+                            trainer.hand,
+                            trainer.discards.toList(),
+                            trainer.missing,
+                        ).sumOf { it.remaining }
+                        stats.recordMahjong(
+                            xyz.nextalone.cardtrainer.stats.MahjongDecisionEvent(
+                                timestampMs = xyz.nextalone.cardtrainer.util.nowEpochMs(),
+                                missingSuit = trainer.missing!!.cn,
+                                shantenBefore = priorShanten,
+                                shantenAfter = afterShanten,
+                                tileDiscardedLabel = tile.label,
+                                engineTop1Label = engineTop1?.tile?.label ?: "",
+                                isEngineTop1 = engineTop1?.tile == tile,
+                                liveWaitsAfter = waits,
+                                wallRemaining = trainer.wallRemaining(),
+                            ),
+                        )
                         adviceTurns = emptyList()
                         adviceError = null
                     },
