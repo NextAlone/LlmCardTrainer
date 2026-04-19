@@ -372,6 +372,22 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         // all update. Otherwise '发下一街' would deal a turn card with the pot
         // still at its pre-decision value.
         table = trainer.applyAction(table, act, amt)
+        // If the hero bet / raised / shoved, run the villain's response
+        // (fold or call). Folds end the hand; calls grow the pot by the
+        // same amount for next street.
+        if (act == Action.BET || act == Action.RAISE || act == Action.ALL_IN) {
+            val resp = xyz.nextalone.cardtrainer.engine.holdem.VillainResponse.react(
+                table = table,
+                heroAction = act,
+                heroAmount = amt,
+            )
+            table = table.copy(
+                pot = table.pot + resp.addedToPot,
+                toCall = resp.newToCall,
+                history = table.history + resp.records,
+                street = if (resp.folded) Street.SHOWDOWN else table.street,
+            )
+        }
         phase = Phase.SUBMITTED
         scope.launch { runEvaluation() }
     }
@@ -686,6 +702,23 @@ private fun SubmittedBlock(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
+        // Villain's response line: if hero bet/raised/shoved, the last
+        // history record is villain's FOLD or CALL reaction.
+        val heroBet = a == Action.BET || a == Action.RAISE || a == Action.ALL_IN
+        val last = if (heroBet) table.history.lastOrNull() else null
+        when (last?.action) {
+            Action.FOLD -> Text(
+                "对手弃牌 — 你赢得底池 ${table.pot} chips",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Action.CALL -> Text(
+                "对手跟注 ${last.amount} chips — 底池变 ${table.pot}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> { /* villain didn't need to respond (hero checked/called/folded) */ }
+        }
     }
 
     Card(
