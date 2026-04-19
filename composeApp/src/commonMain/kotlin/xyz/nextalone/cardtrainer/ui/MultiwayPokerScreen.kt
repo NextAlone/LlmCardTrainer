@@ -689,25 +689,36 @@ private fun FeltStat(label: String, value: String, valueColor: Color, big: Boole
 
 @Composable
 private fun SeatsStrip(table: MultiwayTable) {
-    val sorted = table.seats.filter {
-        it.isHero || it.state != SeatState.FOLDED || it.totalContrib > 0
-    }
-    if (sorted.isEmpty()) return
+    // Keep every dealt-in seat visible, even after a fold, so the user can
+    // see the full pot contribution breakdown (who put in what). Only the
+    // truly empty chairs (cards == null) are filtered out — those are seats
+    // that were never dealt a hand at table-setup time.
+    val seated = table.seats.filter { it.cards != null || it.isHero }
+    if (seated.isEmpty()) return
     BrandSurface {
-        Eyebrow("座位")
+        Eyebrow("座位 · 累计投入")
         Spacer(Modifier.height(8.dp))
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            sorted.forEach { seat ->
+            seated.forEach { seat ->
                 val idx = table.seats.indexOf(seat)
+                val isFolded = seat.state == SeatState.FOLDED
+                // Folded seats collapse their label to '—' so the position
+                // bubble reads like a retired slot but the chips-in number
+                // underneath still lets the user reason about the pot.
+                val label = when {
+                    isFolded -> "—"
+                    seat.isHero -> "${seat.position.label}·你"
+                    else -> seat.position.label
+                }
                 SeatPip(
-                    label = seat.position.label + if (seat.isHero) "·你" else "",
+                    label = label,
                     active = idx == table.toActIndex,
-                    folded = seat.state == SeatState.FOLDED,
-                    bet = seat.contribThisStreet.takeIf { it > 0 },
+                    folded = isFolded,
+                    bet = seat.totalContrib.takeIf { it > 0 },
                 )
             }
         }
