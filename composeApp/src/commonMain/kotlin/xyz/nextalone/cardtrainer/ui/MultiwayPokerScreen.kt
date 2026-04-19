@@ -426,6 +426,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                         table = table,
                         equityPct = equityPct,
                         outs = outs,
+                        revealed = revealedFor == table.street || outcome != null,
                     )
                     SeatsStrip(table = table)
                     if (outcome != null) {
@@ -498,6 +499,7 @@ private fun TableStrip(
     table: MultiwayTable,
     equityPct: Double?,
     outs: OutsReport?,
+    revealed: Boolean,
 ) {
     val c = BrandTheme.colors
     val ivory = Color(0xFFFFFAED)
@@ -597,7 +599,10 @@ private fun TableStrip(
                 }
             }
         }
-        // Stat row
+        // Stat row. Revealed-only stats (胜率 / 赔率 / 牌型 / outs) stay
+        // hidden until the hero has submitted on this street — otherwise the
+        // 'analyse before deciding' loop degenerates into reading the
+        // Monte-Carlo number off the table.
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(18.dp),
@@ -606,22 +611,27 @@ private fun TableStrip(
             FeltStat("底池", table.pot.toString(), ivory)
             FeltStat("跟注", if (table.heroToCall == 0) "—" else table.heroToCall.toString(), ivory)
             FeltStat("栈", table.hero.stack.toString(), ivory)
-            if (equityPct != null) {
-                val r = kotlin.math.round(equityPct * 10) / 10
-                FeltStat("胜率", "$r%", c.accentBright, big = true)
-            }
-            if (potOddsPct != null) {
-                FeltStat("赔率阈值", "$potOddsPct%", ivory)
-            }
-            if (madeHand != null) {
-                FeltStat("现牌型", madeHand, ivory)
-            }
-            if (outs != null) {
-                FeltStat(
-                    "Outs",
-                    "${outs.outs} (${kotlin.math.round(outs.turnAndRiverPct * 10) / 10}%)",
-                    ivory,
-                )
+            if (revealed) {
+                if (equityPct != null) {
+                    val r = kotlin.math.round(equityPct * 10) / 10
+                    FeltStat("胜率", "$r%", c.accentBright, big = true)
+                }
+                if (potOddsPct != null) {
+                    FeltStat("赔率阈值", "$potOddsPct%", ivory)
+                }
+                if (madeHand != null) {
+                    FeltStat("现牌型", madeHand, ivory)
+                }
+                if (outs != null) {
+                    FeltStat(
+                        "Outs",
+                        "${outs.outs} (${kotlin.math.round(outs.turnAndRiverPct * 10) / 10}%)",
+                        ivory,
+                    )
+                }
+            } else {
+                FeltStat("胜率", "—", ivory)
+                FeltStat("牌型", "提交后揭晓", ivory)
             }
         }
     }
