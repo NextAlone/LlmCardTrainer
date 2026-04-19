@@ -842,16 +842,19 @@ private fun MultiwayStreetRow(
         Street.RIVER -> if (table.board.size >= 5) listOf(table.board[4]) else emptyList()
         Street.SHOWDOWN -> table.board
     }
-    val seatColumns: List<Position> = if (street == Street.PREFLOP) {
-        listOf(Position.UTG, Position.MP, Position.CO, Position.BTN, Position.SB, Position.BB)
-            .filter { pos -> table.seats.any { it.position == pos && (it.isLive || it.totalContrib > 0) } }
-    } else {
-        listOf(Position.SB, Position.BB, Position.UTG, Position.MP, Position.CO, Position.BTN)
-            .filter { pos ->
-                table.seats.any {
-                    it.position == pos && it.state != SeatState.FOLDED
-                }
-            }
+    // Keep every dealt-in seat as a column on every street so post-flop rows
+    // still show which seats folded pre-flop (the cell just renders '—').
+    // That context is useful when reasoning about range / line on later
+    // streets; dropping the column erases the pre-flop picture.
+    val seatColumns: List<Position> = run {
+        val order = if (street == Street.PREFLOP) {
+            listOf(Position.UTG, Position.MP, Position.CO, Position.BTN, Position.SB, Position.BB)
+        } else {
+            listOf(Position.SB, Position.BB, Position.UTG, Position.MP, Position.CO, Position.BTN)
+        }
+        order.filter { pos ->
+            table.seats.any { it.position == pos && (it.cards != null || it.isHero) }
+        }
     }
     val heroPos = table.hero.position
     val seated: List<Pair<Position, xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>> =
