@@ -15,3 +15,5 @@ actual fun provideSettings(): Settings {
     val prefs = Preferences.userRoot().node("com/nextalone/cardtrainer")
     return PreferencesSettings(prefs)
 }
+
+actual fun settingsEncrypted(): Boolean = false
