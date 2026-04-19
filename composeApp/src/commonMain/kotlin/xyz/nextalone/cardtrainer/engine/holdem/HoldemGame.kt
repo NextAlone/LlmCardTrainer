@@ -22,6 +22,13 @@ data class ActionRecord(
     val amount: Int,
     val potBefore: Int,
     val toCall: Int,
+    /**
+     * Seat position that performed this action. Optional for backward
+     * compatibility: the single-villain engine doesn't track per-seat actors
+     * and leaves it null; the multiway engine fills it so prompt/UI can say
+     * "UTG raised 6, CO 3-bet to 18".
+     */
+    val actor: Position? = null,
 )
 
 @Serializable

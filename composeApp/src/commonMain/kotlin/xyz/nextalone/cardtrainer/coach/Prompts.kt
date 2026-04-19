@@ -6,6 +6,7 @@ import xyz.nextalone.cardtrainer.engine.holdem.HandCategory
 import xyz.nextalone.cardtrainer.engine.holdem.HoldemTable
 import xyz.nextalone.cardtrainer.engine.holdem.OutsReport
 import xyz.nextalone.cardtrainer.engine.holdem.PreflopAction
+import xyz.nextalone.cardtrainer.engine.holdem.multiway.MultiwayTable
 import xyz.nextalone.cardtrainer.engine.mahjong.DiscardSuggestion
 import xyz.nextalone.cardtrainer.engine.mahjong.HandTypeReport
 import xyz.nextalone.cardtrainer.engine.mahjong.LiveWait
@@ -106,6 +107,81 @@ object Prompts {
             append("【行动历史】\n")
             for (h in table.history) {
                 append("  - ${h.street} ${h.action.label} ${h.amount}\n")
+            }
+        }
+        if (userChoice != null) {
+            val (act, amt) = userChoice
+            val amtText = if (amt > 0) " $amt" else ""
+            append("【用户做出的决策】${act.label}$amtText\n")
+            append("请按模式 (B) 评估该决策。")
+        } else {
+            append("请按模式 (A) 给出本街的推荐决策与理由。")
+        }
+    }
+
+    /**
+     * Multiway overload. Differs from the heads-up prompt in how villain info
+     * is framed: we enumerate every live opponent's position + remaining stack
+     * and reconstruct the action line with per-seat actors so the coach can
+     * reason about 3-bet squeezes, cold-calls, and multi-way equity loss
+     * instead of pretending it's a single villain.
+     */
+    fun holdemUser(
+        table: MultiwayTable,
+        equityPct: Double?,
+        preflopBaseline: PreflopAction?,
+        outs: OutsReport?,
+        madeHand: HandCategory? = null,
+        draws: List<DrawSummary> = emptyList(),
+        userChoice: Pair<Action, Int>? = null,
+    ): String = buildString {
+        val hero = table.hero
+        val heroCards = hero.cards
+            ?: error("hero seat must have hole cards when building a prompt")
+        val liveCount = table.seats.count { it.isLive }
+        append("【当前街】${table.street}\n")
+        append("【位置】${hero.position.label}，存活对手数：${liveCount - 1}\n")
+        append("【手牌】${heroCards.joinToString(" ") { it.label }}\n")
+        if (table.board.isNotEmpty()) {
+            append("【公共牌】${table.board.joinToString(" ") { it.label }}\n")
+        }
+        if (madeHand != null && table.board.size >= 3) {
+            val label = if (table.street.name == "RIVER") "最终牌型" else "当前已成牌型"
+            append("【$label】${madeHand.displayName}\n")
+        }
+        if (draws.isNotEmpty() && table.board.size in 3..4) {
+            append("【听牌】")
+            append(draws.joinToString("、") { "${it.tag}(${it.outs} outs)" })
+            append('\n')
+        }
+        append("【底池】${table.pot}，【跟注额】${table.heroToCall}，【我的筹码】${hero.stack}\n")
+        val otherLive = table.seats.filter { !it.isHero && it.isLive }
+        if (otherLive.isNotEmpty()) {
+            append("【对手筹码】")
+            append(otherLive.joinToString("、") { "${it.position.label}:${it.stack}" })
+            append('\n')
+        }
+        if (table.heroToCall > 0) {
+            val potOdds = table.heroToCall.toDouble() / (table.pot + table.heroToCall)
+            val odds = kotlin.math.round(potOdds * 1000) / 10
+            append("【底池赔率】${odds}%（所需胜率阈值）\n")
+        }
+        if (equityPct != null) {
+            val e = kotlin.math.round(equityPct * 10) / 10
+            append("【蒙特卡洛胜率】${e}%\n")
+        }
+        if (preflopBaseline != null) {
+            append("【翻前基线】位置 ${hero.position.label} 的 RFI 建议：$preflopBaseline\n")
+        }
+        if (outs != null) {
+            append("【Outs】${outs.outs} 张（Turn ≈ ${outs.turnPct}%，Turn+River ≈ ${outs.turnAndRiverPct}%）\n")
+        }
+        if (table.history.isNotEmpty()) {
+            append("【行动历史】\n")
+            for (h in table.history) {
+                val actor = h.actor?.label ?: "?"
+                val amtText = if (h.amount > 0) " ${h.amount}" else ""
+                append("  - ${h.street} $actor ${h.action.label}$amtText\n")
             }
         }
         if (userChoice != null) {

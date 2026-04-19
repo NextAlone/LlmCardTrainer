@@ -178,6 +178,7 @@ object MultiwayEngine {
             },
             potBefore = table.pot,
             toCall = toCall,
+            actor = seat.position,
         )
 
         val updatedSeats = table.seats.toMutableList().also { it[seatIndex] = newSeat }
