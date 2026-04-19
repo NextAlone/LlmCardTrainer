@@ -687,21 +687,25 @@ private fun FeltStat(label: String, value: String, valueColor: Color, big: Boole
 }
 
 /**
- * Compact contribution strip: one column per dealt-in seat, showing
- * [Position] label + cumulative totalContrib. Rendered at the top of the
- * HandProgressionCard so the per-round action grid below doesn't need a
- * separate seats card to answer 'who has put in how much'.
+ * Compact contribution strip. Column order matches the progression grid
+ * below (preflop action order UTG→BB) and each cell uses the same weight(1f)
+ * layout, so the position labels line up with the action cells directly
+ * beneath them. '累计投入' sits as an eyebrow above the row.
  */
 @Composable
 private fun ContributionStrip(table: MultiwayTable) {
-    val seated = table.seats.filter { it.cards != null || it.isHero }
-    if (seated.isEmpty()) return
     val c = BrandTheme.colors
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val order = listOf(
+        Position.UTG, Position.MP, Position.CO, Position.BTN, Position.SB, Position.BB,
+    )
+    val columns = order.mapNotNull { pos ->
+        val seat = table.seats.firstOrNull {
+            it.position == pos && (it.cards != null || it.isHero)
+        } ?: return@mapNotNull null
+        pos to seat
+    }
+    if (columns.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             "累计投入",
             style = TextStyle(
@@ -711,12 +715,11 @@ private fun ContributionStrip(table: MultiwayTable) {
                 letterSpacing = 1.2.sp,
             ),
         )
-        FlowRow(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            seated.forEach { seat ->
+            columns.forEach { (_, seat) ->
                 val idx = table.seats.indexOf(seat)
                 val active = idx == table.toActIndex
                 val isFolded = seat.state == SeatState.FOLDED
@@ -732,19 +735,35 @@ private fun ContributionStrip(table: MultiwayTable) {
                     seat.totalContrib > 0 -> c.fg
                     else -> c.fgSubtle
                 }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Text(
-                        if (isFolded) "—" else seat.position.label + if (seat.isHero) "★" else "",
-                        style = TextStyle(
-                            fontFamily = BrandMonoFamily,
-                            fontSize = 11.sp,
-                            fontWeight = if (seat.isHero || active) FontWeight.SemiBold else FontWeight.Medium,
-                            color = posColor,
-                        ),
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            if (isFolded) "—" else seat.position.label,
+                            style = TextStyle(
+                                fontFamily = BrandMonoFamily,
+                                fontSize = 11.sp,
+                                fontWeight = if (seat.isHero || active) FontWeight.SemiBold else FontWeight.Medium,
+                                color = posColor,
+                            ),
+                        )
+                        if (seat.isHero) {
+                            Text(
+                                "★",
+                                style = TextStyle(
+                                    fontFamily = BrandMonoFamily,
+                                    fontSize = 9.sp,
+                                    color = c.accent,
+                                ),
+                            )
+                        }
+                    }
                     Text(
                         seat.totalContrib.toString(),
                         style = TextStyle(
@@ -842,19 +861,14 @@ private fun MultiwayStreetRow(
         Street.RIVER -> if (table.board.size >= 5) listOf(table.board[4]) else emptyList()
         Street.SHOWDOWN -> table.board
     }
-    // Keep every dealt-in seat as a column on every street so post-flop rows
-    // still show which seats folded pre-flop (the cell just renders '—').
-    // That context is useful when reasoning about range / line on later
-    // streets; dropping the column erases the pre-flop picture.
-    val seatColumns: List<Position> = run {
-        val order = if (street == Street.PREFLOP) {
-            listOf(Position.UTG, Position.MP, Position.CO, Position.BTN, Position.SB, Position.BB)
-        } else {
-            listOf(Position.SB, Position.BB, Position.UTG, Position.MP, Position.CO, Position.BTN)
-        }
-        order.filter { pos ->
-            table.seats.any { it.position == pos && (it.cards != null || it.isHero) }
-        }
+    // Unified column order across all streets (preflop UTG→BB) so the
+    // ContributionStrip header aligns with every street's grid cells below.
+    // Action order inside each row still reads left-to-right as the
+    // engine recorded it, but visual columns stay fixed.
+    val seatColumns: List<Position> = listOf(
+        Position.UTG, Position.MP, Position.CO, Position.BTN, Position.SB, Position.BB,
+    ).filter { pos ->
+        table.seats.any { it.position == pos && (it.cards != null || it.isHero) }
     }
     val heroPos = table.hero.position
     val seated: List<Pair<Position, xyz.nextalone.cardtrainer.engine.holdem.ActionRecord>> =
