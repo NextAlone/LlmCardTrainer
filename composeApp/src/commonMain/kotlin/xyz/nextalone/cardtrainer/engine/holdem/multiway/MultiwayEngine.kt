@@ -39,7 +39,15 @@ object MultiwayEngine {
         rng: Random = Random.Default,
     ): MultiwayTable {
         require(opponents in 1..5) { "opponents must be 1..5" }
-        val opponentPositions = (Position.entries - heroPosition).shuffled(rng).take(opponents)
+        // Blinds must be posted to justify currentBet=2, so BB (and SB if we have
+        // room) are mandatory occupants. Remaining seats are picked randomly from
+        // non-blind positions so the user sees different table shapes per hand.
+        val mandatory = buildList {
+            if (heroPosition != Position.BB) add(Position.BB)
+            if (opponents >= 2 && heroPosition != Position.SB && Position.SB !in this) add(Position.SB)
+        }.take(opponents)
+        val pool = (Position.entries - heroPosition - mandatory.toSet()).shuffled(rng)
+        val opponentPositions = (mandatory + pool.take(opponents - mandatory.size))
         val playing = (listOf(heroPosition) + opponentPositions).toSet()
 
         val seats = PREFLOP_ORDER.map { pos ->
