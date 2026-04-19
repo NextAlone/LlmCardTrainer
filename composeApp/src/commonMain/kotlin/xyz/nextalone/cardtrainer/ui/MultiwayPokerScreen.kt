@@ -142,6 +142,10 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
 
     var activeTab by remember(handSeed) { mutableStateOf(0) }
 
+    // Per-street B-score (parsed from the evaluation assistant reply) so the
+    // bottom bar can show 翻前 / 翻后 / 转牌 / 河牌 badges side-by-side.
+    var scoreByStreet by remember(handSeed) { mutableStateOf<Map<Street, Double>>(emptyMap()) }
+
     val statsRepo = remember { StatsRepository(settings) }
     var resultRecordedFor by remember { mutableStateOf<Long?>(null) }
 
@@ -188,7 +192,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         }
     }
 
-    suspend fun runEvaluation(forTable: MultiwayTable, choice: Pair<Action, Int>) {
+    suspend fun runEvaluation(forTable: MultiwayTable, choice: Pair<Action, Int>, forStreet: Street) {
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
             errorEvaluation = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
@@ -221,6 +225,9 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
             evaluationTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+            parsePokerScore(reply)?.let { parsed ->
+                scoreByStreet = scoreByStreet + (forStreet to parsed)
+            }
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -376,7 +383,8 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             ),
         )
         revealedFor = snapForEval.street
-        scope.launch { runEvaluation(snapForEval, choice) }
+        val evalStreet = snapForEval.street
+        scope.launch { runEvaluation(snapForEval, choice, evalStreet) }
         activeTab = 1
     }
 
@@ -404,6 +412,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             MultiwayBottomBar(
                 table = table,
                 outcome = outcome,
+                scoreByStreet = scoreByStreet,
                 onSubmit = ::submitAction,
                 onNewHand = ::startNewHand,
                 onAdvanceStreet = ::advanceStreet,
@@ -1173,6 +1182,7 @@ private fun CoachPane(
 private fun MultiwayBottomBar(
     table: MultiwayTable,
     outcome: ShowdownOutcome?,
+    scoreByStreet: Map<Street, Double>,
     onSubmit: (Action, Int) -> Unit,
     onNewHand: () -> Unit,
     onAdvanceStreet: () -> Unit,
@@ -1181,6 +1191,7 @@ private fun MultiwayBottomBar(
     val streetClosed = !handOver && table.isStreetClosed
     val heroTurn = !handOver && !streetClosed && table.isHeroTurn
     Column(Modifier.fillMaxWidth()) {
+        MultiwayScoreRow(scoreByStreet = scoreByStreet, current = table.street)
         if (heroTurn) {
             MultiwayActionSheet(table = table, onSubmit = onSubmit)
         }
@@ -1421,4 +1432,97 @@ private fun streetLabel(street: Street): String = when (street) {
     Street.TURN -> "转牌"
     Street.RIVER -> "河牌"
     Street.SHOWDOWN -> "摊牌"
+}
+
+/**
+ * Four street-scoped B-score badges pinned above the action sheet. Badge
+ * colour follows the single-villain PokerScoreBadge tint ladder; the street
+ * currently being played gets a thicker border so the user can see where
+ * the next score will land. Empty slots render as '—'.
+ */
+@Composable
+private fun MultiwayScoreRow(
+    scoreByStreet: Map<Street, Double>,
+    current: Street,
+) {
+    val streets = listOf(Street.PREFLOP, Street.FLOP, Street.TURN, Street.RIVER)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(BrandTheme.colors.surface)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        streets.forEach { s ->
+            MultiwayScoreBadge(
+                label = streetLabel(s),
+                score = scoreByStreet[s],
+                highlighted = s == current,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MultiwayScoreBadge(
+    label: String,
+    score: Double?,
+    highlighted: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val c = BrandTheme.colors
+    val tint = when {
+        score == null -> c.fgSubtle
+        score >= 4.0 -> c.good
+        score >= 3.0 -> c.accent
+        score >= 2.0 -> c.warn
+        else -> c.bad
+    }
+    val shape = RoundedCornerShape(999.dp)
+    Row(
+        modifier
+            .clip(shape)
+            .background(tint.copy(alpha = if (score != null) 0.12f else 0.04f))
+            .border(
+                width = if (highlighted) 1.5.dp else 1.dp,
+                color = if (highlighted) c.accent.copy(alpha = 0.6f) else tint.copy(alpha = 0.5f),
+                shape = shape,
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            label,
+            style = TextStyle(
+                fontFamily = BrandMonoFamily,
+                fontSize = 10.sp,
+                color = c.fgMuted,
+                letterSpacing = 1.2.sp,
+            ),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            score?.let { (kotlin.math.round(it * 10) / 10).toString() } ?: "—",
+            style = TextStyle(
+                fontFamily = BrandMonoFamily,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = tint,
+            ),
+        )
+        if (score != null) {
+            Text(
+                "/5",
+                modifier = Modifier.padding(start = 2.dp),
+                style = TextStyle(
+                    fontFamily = BrandMonoFamily,
+                    fontSize = 10.sp,
+                    color = c.fgSubtle,
+                ),
+            )
+        }
+    }
 }
