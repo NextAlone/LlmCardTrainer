@@ -74,6 +74,9 @@ import xyz.nextalone.cardtrainer.storage.AppSettings
 import xyz.nextalone.cardtrainer.storage.PokerSession
 import xyz.nextalone.cardtrainer.storage.loadPokerSession
 import xyz.nextalone.cardtrainer.storage.savePokerSession
+import xyz.nextalone.cardtrainer.stats.PokerDecisionEvent
+import xyz.nextalone.cardtrainer.stats.StatsRepository
+import xyz.nextalone.cardtrainer.util.nowEpochMs
 import xyz.nextalone.cardtrainer.util.withRetry
 
 private typealias Phase = PokerSession.Phase
@@ -366,8 +369,12 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         }
     }
 
+    val stats = remember { StatsRepository(settings) }
+
     fun submitDecision() {
         val (act, amt) = userChoice ?: return
+        val potBeforeHero = table.pot
+        val toCallBeforeHero = table.toCall
         // Reflect the hero's action in the table state: pot, to-call, history
         // all update. Otherwise '发下一街' would deal a turn card with the pot
         // still at its pre-decision value.
@@ -375,12 +382,14 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         // If the hero bet / raised / shoved, run the villain's response
         // (fold or call). Folds end the hand; calls grow the pot by the
         // same amount for next street.
+        var villainResp: xyz.nextalone.cardtrainer.engine.holdem.VillainResponse.Response? = null
         if (act == Action.BET || act == Action.RAISE || act == Action.ALL_IN) {
             val resp = xyz.nextalone.cardtrainer.engine.holdem.VillainResponse.react(
                 table = table,
                 heroAction = act,
                 heroAmount = amt,
             )
+            villainResp = resp
             table = table.copy(
                 pot = table.pot + resp.addedToPot,
                 toCall = resp.newToCall,
@@ -388,6 +397,30 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 street = if (resp.folded) Street.SHOWDOWN else table.street,
             )
         }
+        // Record the decision for long-term behavioural stats.
+        stats.recordPoker(
+            PokerDecisionEvent(
+                timestampMs = nowEpochMs(),
+                position = table.heroPosition.label,
+                street = when (table.street) {
+                    Street.SHOWDOWN -> when (table.board.size) {
+                        0 -> "PREFLOP"; 3 -> "FLOP"; 4 -> "TURN"; else -> "RIVER"
+                    }
+                    else -> table.street.name
+                },
+                handLabel = PreflopChart.encode(table.hero),
+                boardSize = table.board.size,
+                potBefore = potBeforeHero,
+                toCall = toCallBeforeHero,
+                equityPct = equityPct,
+                action = act.name,
+                amount = amt,
+                rfiBaseline = if (table.board.isEmpty()) preflopBaseline.name else null,
+                villainResponse = villainResp?.let { if (it.folded) "FOLD" else "CALL" },
+                potAfter = table.pot,
+                handOver = table.street == Street.SHOWDOWN,
+            ),
+        )
         phase = Phase.SUBMITTED
         scope.launch { runEvaluation() }
     }
