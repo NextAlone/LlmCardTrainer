@@ -6,6 +6,8 @@ import kotlinx.serialization.json.Json
 import xyz.nextalone.cardtrainer.coach.ChatTurn
 import xyz.nextalone.cardtrainer.engine.holdem.Action
 import xyz.nextalone.cardtrainer.engine.holdem.HoldemTable
+import xyz.nextalone.cardtrainer.engine.holdem.multiway.MultiwayTable
+import xyz.nextalone.cardtrainer.engine.holdem.multiway.ShowdownOutcome
 import xyz.nextalone.cardtrainer.engine.mahjong.SichuanSnapshot
 import xyz.nextalone.cardtrainer.engine.mahjong.Suit as MjSuit
 
@@ -57,7 +59,32 @@ private val json = Json {
     encodeDefaults = false
 }
 
+/**
+ * Persistable multiway poker session. Parallel to [PokerSession]; only one of
+ * the two is populated depending on which engine is active at save time.
+ *
+ * [schemaVersion] is written on every save and read on every load; mismatches
+ * trigger a drop-and-reset instead of decoding into a stale shape. Bump it
+ * when the seat/table wire format changes incompatibly.
+ */
+@Serializable
+data class MultiwayPokerSession(
+    val schemaVersion: Int = SCHEMA_VERSION,
+    val table: MultiwayTable,
+    val phase: PokerSession.Phase,
+    val userChoiceAction: Action? = null,
+    val userChoiceAmount: Int? = null,
+    val situationTurns: List<ChatTurn> = emptyList(),
+    val evaluationTurns: List<ChatTurn> = emptyList(),
+    val showdown: ShowdownOutcome? = null,
+) {
+    companion object {
+        const val SCHEMA_VERSION = 1
+    }
+}
+
 private const val KEY_POKER = "session.poker"
+private const val KEY_POKER_MULTIWAY = "session.poker.multiway"
 private const val KEY_MAHJONG = "session.mahjong"
 
 fun AppSettings.savePokerSession(session: PokerSession?) {
@@ -68,6 +95,18 @@ fun AppSettings.loadPokerSession(): PokerSession? =
     loadRaw(KEY_POKER)?.let {
         runCatching { json.decodeFromString<PokerSession>(it) }.getOrNull()
     }
+
+fun AppSettings.saveMultiwayPokerSession(session: MultiwayPokerSession?) {
+    saveRaw(KEY_POKER_MULTIWAY, session?.let { json.encodeToString(it) })
+}
+
+fun AppSettings.loadMultiwayPokerSession(): MultiwayPokerSession? {
+    val raw = loadRaw(KEY_POKER_MULTIWAY) ?: return null
+    val decoded = runCatching { json.decodeFromString<MultiwayPokerSession>(raw) }.getOrNull()
+    // Drop sessions from an incompatible older schema rather than surfacing a
+    // half-decoded object. A future version bump would migrate here.
+    return decoded?.takeIf { it.schemaVersion == MultiwayPokerSession.SCHEMA_VERSION }
+}
 
 fun AppSettings.saveMahjongSession(session: MahjongSession?) {
     saveRaw(KEY_MAHJONG, session?.let { json.encodeToString(it) })

@@ -23,6 +23,15 @@ class AppSettings(private val settings: Settings) {
         settings.getString(keyModel(kind), kind.defaultModel)
     fun setModel(kind: ProviderKind, value: String) = settings.putString(keyModel(kind), value)
 
+    /**
+     * Feature flag: when true the poker screen drives the multiway engine
+     * (engine.holdem.multiway) instead of the single-villain HoldemTrainer.
+     * Default off while the new engine is stabilizing.
+     */
+    var multiwayEngineEnabled: Boolean
+        get() = settings.getBoolean(KEY_MULTIWAY, false)
+        set(value) = settings.putBoolean(KEY_MULTIWAY, value)
+
     /** Active provider config for use by coach. */
     fun activeConfig(): ProviderConfig {
         val k = providerKind
@@ -49,6 +58,7 @@ class AppSettings(private val settings: Settings) {
 
     companion object {
         private const val KEY_PROVIDER = "active_provider"
+        private const val KEY_MULTIWAY = "engine.multiway_enabled"
     }
 }
 
