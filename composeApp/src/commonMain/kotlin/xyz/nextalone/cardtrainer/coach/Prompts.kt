@@ -126,7 +126,7 @@ object Prompts {
      *  - EVALUATION: decision submitted — grade it;
      *  - STREET_RECAP: street closed — summarise the whole table's line.
      */
-    enum class MultiwayAnalysisMode { SITUATION, EVALUATION, STREET_RECAP }
+    enum class MultiwayAnalysisMode { SITUATION, EVALUATION, STREET_RECAP, HAND_RECAP }
 
     /**
      * One hero submission on a street. Snapshot state is captured at submit
@@ -272,6 +272,14 @@ object Prompts {
                     "2. 底池演化与 SPR 变化对后续街的影响；\n" +
                     "3. 你（hero）本街的整体贡献价值（EV 感）与可改进的地方。\n" +
                     "若牌局已结束，只回顾至此街；不要预测尚未翻出的公共牌。" +
+                    "本次不输出首行的『【评分】』。"
+            MultiwayAnalysisMode.HAND_RECAP ->
+                "本手牌已彻底结束。请给出整手回顾（跨翻前到摊牌）：\n" +
+                    "1. 关键转折点：哪些 action 决定了本手走势（不仅是 hero，也包括对手）；\n" +
+                    "2. hero 的整体思路与实际 EV / 真实胜率的差距，是否有情绪 / 位置 / 底池控制方面的系统性倾向；\n" +
+                    "3. 与基线相比的 1-2 个可以下次复盘时重点练习的点；\n" +
+                    "4. 若走到摊牌，点评 showdown 牌型分布是否符合预期 range。\n" +
+                    "语气教练式、具体、避免重复【牌局进程】已罗列的事实。" +
                     "本次不输出首行的『【评分】』。"
         }
         append(tail)

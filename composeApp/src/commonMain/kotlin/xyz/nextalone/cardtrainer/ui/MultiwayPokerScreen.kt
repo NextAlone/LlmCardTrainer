@@ -125,12 +125,16 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     var situationTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
     var evaluationTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
     var recapTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
+    var handRecapTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
     var loadingSituation by remember(handSeed) { mutableStateOf(false) }
     var loadingEvaluation by remember(handSeed) { mutableStateOf(false) }
     var loadingRecap by remember(handSeed) { mutableStateOf(false) }
+    var loadingHandRecap by remember(handSeed) { mutableStateOf(false) }
     var errorSituation by remember(handSeed) { mutableStateOf<String?>(null) }
     var errorEvaluation by remember(handSeed) { mutableStateOf<String?>(null) }
     var errorRecap by remember(handSeed) { mutableStateOf<String?>(null) }
+    var errorHandRecap by remember(handSeed) { mutableStateOf<String?>(null) }
+    var handRecapFired by remember(handSeed) { mutableStateOf(false) }
 
     // Per-street gating so each coach slot fires at most once.
     var situationFor by remember(handSeed) { mutableStateOf<Street?>(null) }
@@ -236,6 +240,43 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         } finally {
             coach.close()
             loadingEvaluation = false
+        }
+    }
+
+    suspend fun runHandRecap(snapshot: MultiwayTable) {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            errorHandRecap = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        loadingHandRecap = true
+        errorHandRecap = null
+        val seed = listOf(
+            ChatTurn(
+                ChatTurn.Role.USER,
+                Prompts.holdemUser(
+                    table = snapshot,
+                    equityPct = equityPct,
+                    preflopBaseline = null,
+                    outs = outs,
+                    userChoice = userChoice,
+                    mode = Prompts.MultiwayAnalysisMode.HAND_RECAP,
+                ),
+            ),
+        )
+        val coach = LlmProviders.create(cfg)
+        try {
+            val reply = withRetry {
+                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            }
+            handRecapTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            errorHandRecap = t.message ?: t::class.simpleName ?: "未知错误"
+        } finally {
+            coach.close()
+            loadingHandRecap = false
         }
     }
 
@@ -423,6 +464,17 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         activeTab = 1
     }
 
+    // Fire the whole-hand recap exactly once, right after the hand settles.
+    // Distinct from runRecap (per-street) so tabs can show both side-by-side.
+    LaunchedEffect(outcome, handSeed) {
+        outcome ?: return@LaunchedEffect
+        if (!handRecapFired) {
+            handRecapFired = true
+            val snap = table
+            scope.launch { runHandRecap(snap) }
+        }
+    }
+
     LaunchedEffect(outcome, handSeed) {
         val o = outcome ?: return@LaunchedEffect
         if (resultRecordedFor == handSeed) return@LaunchedEffect
@@ -491,13 +543,17 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                         situationTurns = situationTurns,
                         evaluationTurns = evaluationTurns,
                         recapTurns = recapTurns,
+                        handRecapTurns = handRecapTurns,
                         loadingSituation = loadingSituation,
                         loadingEvaluation = loadingEvaluation,
                         loadingRecap = loadingRecap,
+                        loadingHandRecap = loadingHandRecap,
                         errorSituation = errorSituation,
                         errorEvaluation = errorEvaluation,
                         errorRecap = errorRecap,
+                        errorHandRecap = errorHandRecap,
                         situationRevealed = revealedFor == table.street || outcome != null,
+                        handSettled = outcome != null,
                     )
                     // Spacer so the last card isn't hidden under the pinned bar.
                     Spacer(Modifier.height(72.dp))
@@ -1191,21 +1247,26 @@ private fun CoachTabsBlock(
     situationTurns: List<ChatTurn>,
     evaluationTurns: List<ChatTurn>,
     recapTurns: List<ChatTurn>,
+    handRecapTurns: List<ChatTurn>,
     loadingSituation: Boolean,
     loadingEvaluation: Boolean,
     loadingRecap: Boolean,
+    loadingHandRecap: Boolean,
     errorSituation: String?,
     errorEvaluation: String?,
     errorRecap: String?,
+    errorHandRecap: String?,
     situationRevealed: Boolean,
+    handSettled: Boolean,
 ) {
     BrandSurface {
-        Eyebrow("AI 教练 · 三视角")
+        Eyebrow("AI 教练 · 四视角")
         Spacer(Modifier.height(10.dp))
         TabRow(selectedTabIndex = activeTab) {
             Tab(selected = activeTab == 0, onClick = { onTab(0) }, text = { Text("A 情境") })
             Tab(selected = activeTab == 1, onClick = { onTab(1) }, text = { Text("B 评分") })
             Tab(selected = activeTab == 2, onClick = { onTab(2) }, text = { Text("C 街总结") })
+            Tab(selected = activeTab == 3, onClick = { onTab(3) }, text = { Text("D 整手") })
         }
         Spacer(Modifier.height(10.dp))
         when (activeTab) {
@@ -1231,12 +1292,26 @@ private fun CoachTabsBlock(
                 emptyHint = "本街结束时一次性给每次决策打分。",
                 stripScore = false,
             )
-            else -> CoachPane(
+            2 -> CoachPane(
                 turns = recapTurns,
                 loading = loadingRecap,
                 error = errorRecap,
-                emptyHint = "街结束后给出全桌回顾。",
+                emptyHint = "每街结束给全桌回顾。",
             )
+            else -> if (!handSettled) {
+                Text(
+                    "牌局结束后给整手总结（含 showdown 与关键转折点）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BrandTheme.colors.fgMuted,
+                )
+            } else {
+                CoachPane(
+                    turns = handRecapTurns,
+                    loading = loadingHandRecap,
+                    error = errorHandRecap,
+                    emptyHint = "整手总结加载中…",
+                )
+            }
         }
     }
 }
