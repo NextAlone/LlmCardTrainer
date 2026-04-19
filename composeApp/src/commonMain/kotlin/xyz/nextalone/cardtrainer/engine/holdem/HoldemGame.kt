@@ -237,12 +237,16 @@ object ActionPresets {
                 add(ActionPreset(Action.BET, 8.coerceAtMost(stack), "加注 4bb"))
                 add(ActionPreset(Action.BET, 10.coerceAtMost(stack), "加注 5bb"))
             } else {
-                add(ActionPreset(Action.BET, (pot / 3).coerceAtLeast(1), "下注 ⅓ 底池"))
-                add(ActionPreset(Action.BET, (pot / 2).coerceAtLeast(1), "下注 ½ 底池"))
-                add(ActionPreset(Action.BET, (pot * 2 / 3).coerceAtLeast(1), "下注 ⅔ 底池"))
-                add(ActionPreset(Action.BET, pot.coerceAtLeast(1), "下注 1 底池"))
-                add(ActionPreset(Action.BET, (pot * 3 / 2).coerceAtLeast(1), "下注 1.5 底池"))
-                add(ActionPreset(Action.BET, (pot * 2).coerceAtLeast(1), "下注 2 底池 (overbet)"))
+                // ASCII fraction glyphs only — `⅓ / ½ / ⅔` may be missing in
+                // the system fallback font and render as blank boxes on some
+                // Android devices. Suffix `p` == pot; verbose "底池" gets
+                // truncated in the narrow action-sheet chip row.
+                add(ActionPreset(Action.BET, (pot / 3).coerceAtLeast(1), "下注 1/3p"))
+                add(ActionPreset(Action.BET, (pot / 2).coerceAtLeast(1), "下注 1/2p"))
+                add(ActionPreset(Action.BET, (pot * 2 / 3).coerceAtLeast(1), "下注 2/3p"))
+                add(ActionPreset(Action.BET, pot.coerceAtLeast(1), "下注 1p"))
+                add(ActionPreset(Action.BET, (pot * 3 / 2).coerceAtLeast(1), "下注 1.5p"))
+                add(ActionPreset(Action.BET, (pot * 2).coerceAtLeast(1), "下注 2p"))
             }
         } else {
             add(ActionPreset(Action.FOLD, 0, "弃牌"))

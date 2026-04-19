@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import xyz.nextalone.cardtrainer.coach.ChatTurn
 import xyz.nextalone.cardtrainer.coach.LlmProviders
 import xyz.nextalone.cardtrainer.coach.Prompts
@@ -66,6 +67,17 @@ import xyz.nextalone.cardtrainer.storage.AppSettings
 import xyz.nextalone.cardtrainer.storage.MahjongSession
 import xyz.nextalone.cardtrainer.storage.loadMahjongSession
 import xyz.nextalone.cardtrainer.storage.saveMahjongSession
+import xyz.nextalone.cardtrainer.ui.components.BrandChip
+import xyz.nextalone.cardtrainer.ui.components.BrandSurface
+import xyz.nextalone.cardtrainer.ui.components.ChipTone
+import xyz.nextalone.cardtrainer.ui.components.Eyebrow
+import xyz.nextalone.cardtrainer.ui.components.MahjongTileView
+import xyz.nextalone.cardtrainer.ui.components.MjSuit
+import xyz.nextalone.cardtrainer.ui.components.SectionHeader
+import xyz.nextalone.cardtrainer.ui.components.TileSize
+import xyz.nextalone.cardtrainer.ui.theme.BrandDisplayFamily
+import xyz.nextalone.cardtrainer.ui.theme.BrandMonoFamily
+import xyz.nextalone.cardtrainer.ui.theme.BrandTheme
 import xyz.nextalone.cardtrainer.util.withRetry
 import androidx.compose.runtime.LaunchedEffect
 import kotlin.coroutines.cancellation.CancellationException
@@ -227,174 +239,160 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
         step = MjStep.NOT_DEALT
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("四川麻将训练") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showGlossary = true }) {
-                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "术语")
-                    }
-                },
-            )
-        },
-        bottomBar = {
-            // Pin AI 分析 + 重新开局 once a hand is in play; they no longer scroll
-            // out of reach when the AI response is long.
-            if (step == MjStep.PLAYING) {
-                Surface(tonalElevation = 3.dp) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        FilledTonalButton(
-                            onClick = ::askCoach,
-                            enabled = !loading,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            if (loading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text("思考中…")
-                            } else {
-                                Text("AI 教练分析")
-                            }
-                        }
-                        OutlinedButton(
-                            onClick = ::resetGame,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("重新开局") }
-                    }
+    val onDiscardHero: (Tile) -> Unit = { tile ->
+        val priorShanten = HandCheck.shanten(trainer.hand, trainer.missing)
+        val engineTop1 = if (trainer.hand.size == 14) {
+            trainer.rankDiscards(limit = 1).firstOrNull()
+        } else null
+        trainer.discard(tile)
+        trainer.runOpponentsAndDraw()
+        refreshHand()
+        val afterShanten = HandCheck.shanten(trainer.hand, trainer.missing)
+        val waits = UkeIre.waitingWithCounts(
+            trainer.hand,
+            trainer.discards.toList(),
+            trainer.missing,
+        ).sumOf { it.remaining }
+        stats.recordMahjong(
+            xyz.nextalone.cardtrainer.stats.MahjongDecisionEvent(
+                timestampMs = xyz.nextalone.cardtrainer.util.nowEpochMs(),
+                missingSuit = trainer.missing!!.cn,
+                shantenBefore = priorShanten,
+                shantenAfter = afterShanten,
+                tileDiscardedLabel = tile.label,
+                engineTop1Label = engineTop1?.tile?.label ?: "",
+                isEngineTop1 = engineTop1?.tile == tile,
+                liveWaitsAfter = waits,
+                wallRemaining = trainer.wallRemaining(),
+            ),
+        )
+        adviceTurns = emptyList()
+        adviceError = null
+    }
+
+    val onDeal: () -> Unit = {
+        trainer = SichuanTrainer()
+        trainer.dealInitial()
+        refreshHand()
+        pendingQue = DingQue.recommend(trainer.hand.toList()).first().suit
+        step = MjStep.CHOOSING_QUE
+    }
+
+    val onConfirmQue: () -> Unit = {
+        trainer.declareMissing(pendingQue)
+        trainer.drawTile()
+        refreshHand()
+        step = MjStep.PLAYING
+        adviceTurns = emptyList()
+        adviceError = null
+    }
+
+    xyz.nextalone.cardtrainer.ui.components.WithDeviceMode { mode ->
+        val isPhone = mode == xyz.nextalone.cardtrainer.ui.components.DeviceMode.Phone
+        val shellTitle = when (step) {
+            MjStep.NOT_DEALT -> "准备发牌"
+            MjStep.CHOOSING_QUE -> "定缺"
+            MjStep.PLAYING -> run {
+                val sh = HandCheck.shanten(trainer.hand, trainer.missing)
+                val win = HandCheck.isWinning(trainer.hand, trainer.missing)
+                when {
+                    win -> "已胡"
+                    sh <= 0 -> "听牌 · 牌墙 ${trainer.wallRemaining()}"
+                    else -> "向听 $sh · 牌墙 ${trainer.wallRemaining()}"
                 }
             }
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        }
+        val eyebrow = when (step) {
+            MjStep.NOT_DEALT -> "SICHUAN · 血战到底"
+            MjStep.CHOOSING_QUE -> "SICHUAN · 选择缺门"
+            MjStep.PLAYING -> "SICHUAN · 缺${trainer.missing?.cn ?: "?"} · 血战到底"
+        }
+        val body: @Composable () -> Unit = {
             when (step) {
-                MjStep.NOT_DEALT -> {
-                    Text(
-                        "血战到底 108 张（万/条/筒，各 4 张）。点击发牌，引擎会给出 定缺 建议。",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Button(
-                        onClick = {
-                            trainer = SichuanTrainer()
-                            trainer.dealInitial()
-                            refreshHand()
-                            pendingQue = DingQue.recommend(trainer.hand.toList()).first().suit
-                            step = MjStep.CHOOSING_QUE
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("发 13 张") }
-                }
-
-                MjStep.CHOOSING_QUE -> {
-                    Card {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("已发 13 张手牌", fontWeight = FontWeight.SemiBold)
-                            Spacer(Modifier.height(8.dp))
-                            HandBySuit(hand = hand, onDiscard = {})
-                        }
-                    }
-                    val advisories = remember(hand) { DingQue.recommend(hand) }
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        ),
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(
-                                "引擎定缺推荐（按弃后向听数排序）",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            advisories.forEach {
-                                Text("缺${it.suit.cn}：保留分 ${it.score}（越低越适合缺），该门 ${it.countInSuit} 张")
-                            }
-                        }
-                    }
-                    Text("选择定缺：")
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Suit.entries.forEach { s ->
-                            FilterChip(
-                                selected = pendingQue == s,
-                                onClick = { pendingQue = s },
-                                label = { Text("缺${s.cn}") },
-                            )
-                        }
-                    }
-                    Button(
-                        onClick = {
-                            trainer.declareMissing(pendingQue)
-                            trainer.drawTile()
-                            refreshHand()
-                            step = MjStep.PLAYING
-                            adviceTurns = emptyList()
-                            adviceError = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("确认定缺并摸牌") }
-                }
-
-                MjStep.PLAYING -> PlayingContent(
-                    trainer = trainer,
+                MjStep.NOT_DEALT -> MahjongIntroContent(isPhone = isPhone, onDeal = onDeal)
+                MjStep.CHOOSING_QUE -> MahjongChooseQueContent(
+                    isPhone = isPhone,
                     hand = hand,
-                    missing = trainer.missing!!,
-                    adviceTurns = adviceTurns,
-                    adviceError = adviceError,
-                    loadingAdvice = loading,
-                    onRetryAdvice = ::askCoach,
-                    onFollowUpAdvice = ::followUpAdvice,
-                    onDiscard = { tile ->
-                        // Before mutating the trainer, snapshot the engine's
-                        // best suggestion + current shanten so we can compare
-                        // user's choice and report top-1 match for stats.
-                        val priorShanten = HandCheck.shanten(trainer.hand, trainer.missing)
-                        val engineTop1 = if (trainer.hand.size == 14) {
-                            trainer.rankDiscards(limit = 1).firstOrNull()
-                        } else null
-                        trainer.discard(tile)
-                        // 3 bots draw+discard, then hero draws — this is the
-                        // real 4-seat round structure.
-                        trainer.runOpponentsAndDraw()
-                        refreshHand()
-                        val afterShanten = HandCheck.shanten(trainer.hand, trainer.missing)
-                        val waits = UkeIre.waitingWithCounts(
-                            trainer.hand,
-                            trainer.discards.toList(),
-                            trainer.missing,
-                        ).sumOf { it.remaining }
-                        stats.recordMahjong(
-                            xyz.nextalone.cardtrainer.stats.MahjongDecisionEvent(
-                                timestampMs = xyz.nextalone.cardtrainer.util.nowEpochMs(),
-                                missingSuit = trainer.missing!!.cn,
-                                shantenBefore = priorShanten,
-                                shantenAfter = afterShanten,
-                                tileDiscardedLabel = tile.label,
-                                engineTop1Label = engineTop1?.tile?.label ?: "",
-                                isEngineTop1 = engineTop1?.tile == tile,
-                                liveWaitsAfter = waits,
-                                wallRemaining = trainer.wallRemaining(),
-                            ),
-                        )
-                        adviceTurns = emptyList()
-                        adviceError = null
-                    },
+                    pendingQue = pendingQue,
+                    onPickQue = { pendingQue = it },
+                    onConfirm = onConfirmQue,
                 )
+                MjStep.PLAYING -> {
+                    if (isPhone) {
+                        PlayingContentPhone(
+                            trainer = trainer,
+                            hand = hand,
+                            missing = trainer.missing!!,
+                            adviceTurns = adviceTurns,
+                            adviceError = adviceError,
+                            loadingAdvice = loading,
+                            onRetryAdvice = ::askCoach,
+                            onFollowUpAdvice = ::followUpAdvice,
+                            onDiscard = onDiscardHero,
+                        )
+                    } else {
+                        PlayingContentDesktop(
+                            trainer = trainer,
+                            hand = hand,
+                            missing = trainer.missing!!,
+                            adviceTurns = adviceTurns,
+                            adviceError = adviceError,
+                            loadingAdvice = loading,
+                            onRetryAdvice = ::askCoach,
+                            onFollowUpAdvice = ::followUpAdvice,
+                            onDiscard = onDiscardHero,
+                        )
+                    }
+                }
             }
+        }
+        val bottomBar: @Composable () -> Unit = {
+            if (step == MjStep.PLAYING) {
+                xyz.nextalone.cardtrainer.ui.components.PinnedActionBar {
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(onClick = ::resetGame) { Text("重新开局") }
+                    Button(onClick = ::askCoach, enabled = !loading) {
+                        if (loading) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = BrandTheme.colors.fg)
+                            Spacer(Modifier.width(6.dp))
+                            Text("思考中")
+                        } else Text("AI 教练分析")
+                    }
+                }
+            }
+        }
+
+        if (isPhone) {
+            xyz.nextalone.cardtrainer.ui.components.PhoneShell(
+                eyebrow = eyebrow,
+                title = shellTitle,
+                onBack = onBack,
+                topRight = {
+                    BrandChip("术语", tone = ChipTone.Outline, onClick = { showGlossary = true })
+                },
+                bottomBar = bottomBar,
+                body = body,
+            )
+        } else {
+            xyz.nextalone.cardtrainer.ui.components.DesktopShell(
+                eyebrow = eyebrow,
+                title = shellTitle,
+                windowLabel = "LLM Card Trainer · Mahjong",
+                onBack = onBack,
+                topRight = {
+                    BrandChip("术语", tone = ChipTone.Outline, onClick = { showGlossary = true })
+                    BrandChip("血战到底", tone = ChipTone.Outline)
+                    if (step == MjStep.PLAYING) {
+                        val sh = HandCheck.shanten(trainer.hand, trainer.missing)
+                        BrandChip(
+                            if (sh <= 0) "听 / 胡" else "向听 $sh",
+                            tone = if (sh <= 0) ChipTone.Good else ChipTone.Accent,
+                        )
+                    }
+                },
+                bottomBar = bottomBar,
+                body = body,
+            )
         }
     }
 
@@ -404,7 +402,214 @@ fun MahjongScreen(settings: AppSettings, onBack: () -> Unit) {
 }
 
 @Composable
-private fun PlayingContent(
+private fun MahjongIntroContent(isPhone: Boolean, onDeal: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = if (isPhone) 14.dp else 24.dp, vertical = if (isPhone) 12.dp else 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        BrandSurface {
+            Eyebrow("血战到底 · 108 张")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "万 / 条 / 筒 各 4 张 · 共 108 张。点击发牌，引擎会给出 定缺 建议。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = BrandTheme.colors.fg,
+            )
+        }
+        Button(onClick = onDeal, modifier = Modifier.fillMaxWidth()) { Text("发 13 张") }
+    }
+}
+
+@Composable
+private fun MahjongChooseQueContent(
+    isPhone: Boolean,
+    hand: List<Tile>,
+    pendingQue: Suit,
+    onPickQue: (Suit) -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val advisories = remember(hand) { DingQue.recommend(hand) }
+    val content: @Composable () -> Unit = {
+        BrandSurface {
+            Eyebrow("已发 13 张手牌")
+            Spacer(Modifier.height(10.dp))
+            HandBySuit(hand = hand, onDiscard = {})
+        }
+        BrandSurface {
+            Eyebrow("引擎定缺推荐 · 弃后向听排序")
+            Spacer(Modifier.height(8.dp))
+            advisories.forEach {
+                Text(
+                    "缺${it.suit.cn}：保留分 ${it.score}（越低越适合缺），该门 ${it.countInSuit} 张",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BrandTheme.colors.fg,
+                )
+            }
+        }
+        Text("选择定缺", style = MaterialTheme.typography.titleMedium, color = BrandTheme.colors.fg)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Suit.entries.forEach { s ->
+                FilterChip(
+                    selected = pendingQue == s,
+                    onClick = { onPickQue(s) },
+                    label = { Text("缺${s.cn}") },
+                )
+            }
+        }
+        Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) { Text("确认定缺并摸牌") }
+    }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = if (isPhone) 14.dp else 24.dp, vertical = if (isPhone) 12.dp else 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) { content() }
+}
+
+/**
+ * Off-main shanten + ukeire computation. `trainer.rankDiscards()` calls the
+ * shanten solver 14 times and `UkeIre.waitingWithCounts` calls it 27 times —
+ * together ~40 solves that block the first frame when landing on the Mahjong
+ * screen. Moving to `Dispatchers.Default` lets the UI paint the hand surface
+ * immediately and fill the suggestions / wait chips when ready.
+ */
+@Composable
+private fun asyncShantenAnalysis(
+    trainer: SichuanTrainer,
+    hand: List<Tile>,
+    missing: Suit,
+): Pair<List<xyz.nextalone.cardtrainer.engine.mahjong.DiscardSuggestion>, List<xyz.nextalone.cardtrainer.engine.mahjong.LiveWait>> {
+    val suggestions by androidx.compose.runtime.produceState(
+        initialValue = emptyList<xyz.nextalone.cardtrainer.engine.mahjong.DiscardSuggestion>(),
+        key1 = hand,
+    ) {
+        value = if (hand.size == 14) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                trainer.rankDiscards()
+            }
+        } else emptyList()
+    }
+    val liveWaits by androidx.compose.runtime.produceState(
+        initialValue = emptyList<xyz.nextalone.cardtrainer.engine.mahjong.LiveWait>(),
+        key1 = hand,
+        key2 = suggestions,
+    ) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val base = if (hand.size == 14 && suggestions.isNotEmpty())
+                hand.toMutableList().also { it.remove(suggestions.first().tile) }
+            else hand
+            UkeIre.waitingWithCounts(base, trainer.discards.toList(), missing)
+        }
+    }
+    return suggestions to liveWaits
+}
+
+/** Shared hand + state surface used by both Phone and Desktop PLAYING views. */
+@Composable
+private fun HandSurface(
+    trainer: SichuanTrainer,
+    hand: List<Tile>,
+    missing: Suit,
+    onDiscard: (Tile) -> Unit,
+) {
+    val shanten = remember(hand) { HandCheck.shanten(hand, missing) }
+    val winning = remember(hand) { HandCheck.isWinning(hand, missing) }
+    val typeReport = remember(hand) {
+        if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, missing))
+            HandType.classify(hand)
+        else null
+    }
+    BrandSurface {
+        SectionHeader(
+            eyebrow = "定缺 ${missing.cn} · 牌墙 ${trainer.wallRemaining()}",
+            title = when {
+                winning -> "已胡！" + (typeReport?.labels?.joinToString("、")?.let { " ($it)" } ?: "")
+                shanten <= 0 -> "听牌"
+                else -> "向听 $shanten · 听牌前 $shanten 步"
+            },
+            right = {
+                if (winning) BrandChip("胡", tone = ChipTone.Good)
+                else if (shanten <= 0) BrandChip("听", tone = ChipTone.Good)
+                else BrandChip("向听 $shanten", tone = ChipTone.Outline)
+            },
+        )
+        Spacer(Modifier.height(14.dp))
+        Text(
+            if (hand.size == 14) "点击手牌打出 → 自动摸下一张"
+            else "等待摸牌…",
+            style = MaterialTheme.typography.bodySmall,
+            color = BrandTheme.colors.fgMuted,
+        )
+        Spacer(Modifier.height(10.dp))
+        HandBySuit(
+            hand = hand,
+            missing = missing,
+            onDiscard = { if (hand.size == 14) onDiscard(it) },
+        )
+    }
+}
+
+@Composable
+private fun SuggestionsPanel(suggestions: List<xyz.nextalone.cardtrainer.engine.mahjong.DiscardSuggestion>) {
+    if (suggestions.isEmpty()) return
+    BrandSurface {
+        Eyebrow("引擎候选弃牌")
+        Spacer(Modifier.height(10.dp))
+        suggestions.forEachIndexed { i, s ->
+            val tag = when {
+                s.shantenAfter < 0 -> "打出即胡"
+                s.shantenAfter == 0 -> "听 ${s.waitSize} 张"
+                else -> "向听 ${s.shantenAfter}"
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "${i + 1}.",
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontFamily = BrandMonoFamily,
+                        fontSize = 12.sp,
+                        color = BrandTheme.colors.fgSubtle,
+                    ),
+                    modifier = Modifier.width(20.dp),
+                )
+                TileView(s.tile, dim = false) { }
+                Text(
+                    "→ $tag",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BrandTheme.colors.fg,
+                    fontWeight = if (i == 0) FontWeight.SemiBold else FontWeight.Normal,
+                )
+                Spacer(Modifier.weight(1f))
+                if (i == 0) BrandChip("最佳", tone = ChipTone.Accent)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveWaitsPanel(liveWaits: List<xyz.nextalone.cardtrainer.engine.mahjong.LiveWait>) {
+    if (liveWaits.isEmpty()) return
+    BrandSurface {
+        Eyebrow("有效进张 · 剩余")
+        Spacer(Modifier.height(8.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            liveWaits.forEach { w -> BrandChip("${w.tile.label}×${w.remaining}", tone = ChipTone.Outline) }
+        }
+    }
+}
+
+@Composable
+private fun PlayingContentPhone(
     trainer: SichuanTrainer,
     hand: List<Tile>,
     missing: Suit,
@@ -415,114 +620,90 @@ private fun PlayingContent(
     onFollowUpAdvice: (String) -> Unit,
     onDiscard: (Tile) -> Unit,
 ) {
-    val shanten = remember(hand) { HandCheck.shanten(hand, missing) }
-    val winning = remember(hand) { HandCheck.isWinning(hand, missing) }
-    val suggestions = remember(hand) {
-        if (hand.size == 14) trainer.rankDiscards() else emptyList()
-    }
-    val liveWaits = remember(hand) {
-        val base = if (hand.size == 14 && suggestions.isNotEmpty())
-            hand.toMutableList().also { it.remove(suggestions.first().tile) }
-        else hand
-        UkeIre.waitingWithCounts(base, trainer.discards.toList(), missing)
-    }
-    val typeReport = remember(hand) {
-        if (hand.size in listOf(2, 5, 8, 11, 14) && HandCheck.isWinning(hand, missing))
-            HandType.classify(hand)
-        else null
-    }
-
-    // One-time in-screen operation hint.
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+    val (suggestions, liveWaits) = asyncShantenAnalysis(trainer, hand, missing)
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            "点击手牌中任意一张 = 打出这张，引擎会自动从牌墙再摸一张进手。\n" +
-                "目标：通过打 / 摸进张降低「向听数」直到听牌（0）→ 胡牌（-1）。\n" +
-                "需要策略时点底部「AI 教练分析」让 LLM 结合向听、进张、安全度给建议。",
-            modifier = Modifier.padding(14.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onTertiaryContainer,
-        )
-    }
-
-    Card {
-        Column(Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("缺${missing.cn}", fontWeight = FontWeight.SemiBold)
-                Text(
-                    when {
-                        winning -> "已胡！" + (typeReport?.labels?.joinToString("、")?.let { " ($it)" } ?: "")
-                        shanten <= 0 -> "听牌"
-                        else -> "向听 $shanten"
-                    },
-                    color = if (winning || shanten <= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                )
-                Text("牌墙余 ${trainer.wallRemaining()}")
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                if (hand.size == 14) "手牌（点击打出 → 自动摸下一张）"
-                else "手牌（等待摸牌）",
-                style = MaterialTheme.typography.labelMedium,
-            )
-            Spacer(Modifier.height(6.dp))
-            HandBySuit(
-                hand = hand,
-                onDiscard = { if (hand.size == 14) onDiscard(it) },
+        HandSurface(trainer, hand, missing, onDiscard)
+        SuggestionsPanel(suggestions)
+        LiveWaitsPanel(liveWaits)
+        OpponentDiscardsPanel(trainer = trainer)
+        TilePoolPanel(unseen = trainer.unseenByTile())
+        if (adviceTurns.isNotEmpty() || adviceError != null || loadingAdvice) {
+            AiConversation(
+                title = "AI 教练建议",
+                turns = adviceTurns,
+                loading = loadingAdvice,
+                error = adviceError,
+                onRetry = onRetryAdvice,
+                onFollowUp = onFollowUpAdvice,
+                accentTone = ChipTone.Accent,
             )
         }
     }
+}
 
-    if (suggestions.isNotEmpty()) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+@Composable
+private fun PlayingContentDesktop(
+    trainer: SichuanTrainer,
+    hand: List<Tile>,
+    missing: Suit,
+    adviceTurns: List<ChatTurn>,
+    adviceError: String?,
+    loadingAdvice: Boolean,
+    onRetryAdvice: () -> Unit,
+    onFollowUpAdvice: (String) -> Unit,
+    onDiscard: (Tile) -> Unit,
+) {
+    val (suggestions, liveWaits) = asyncShantenAnalysis(trainer, hand, missing)
+    Row(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        // Left: hand, melds (opponent strip), tile pool
+        Column(
+            Modifier.weight(1.35f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Column(Modifier.padding(16.dp)) {
-                Text("引擎候选弃牌", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
-                suggestions.forEachIndexed { i, s ->
-                    val tag = when {
-                        s.shantenAfter < 0 -> "打出即胡"
-                        s.shantenAfter == 0 -> "听 ${s.waitSize} 张"
-                        else -> "向听 ${s.shantenAfter}"
-                    }
-                    Text("${i + 1}. ${s.tile.label}  →  $tag")
+            OpponentDiscardsPanel(trainer = trainer)
+            HandSurface(trainer, hand, missing, onDiscard)
+            TilePoolPanel(unseen = trainer.unseenByTile())
+        }
+        // Right: suggestions, waits, AI coach
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            SuggestionsPanel(suggestions)
+            LiveWaitsPanel(liveWaits)
+            if (adviceTurns.isNotEmpty() || adviceError != null || loadingAdvice) {
+                AiConversation(
+                    title = "AI 教练建议",
+                    turns = adviceTurns,
+                    loading = loadingAdvice,
+                    error = adviceError,
+                    onRetry = onRetryAdvice,
+                    onFollowUp = onFollowUpAdvice,
+                    accentTone = ChipTone.Accent,
+                )
+            } else {
+                BrandSurface {
+                    Eyebrow("AI 教练就绪")
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "点击底部「AI 教练分析」让 LLM 结合向听、进张、安全度给建议。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BrandTheme.colors.fgMuted,
+                    )
                 }
             }
         }
-    }
-
-    if (liveWaits.isNotEmpty()) {
-        Card {
-            Column(Modifier.padding(16.dp)) {
-                Text("有效进张（剩余）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
-                Text(liveWaits.joinToString("  ") { "${it.tile.label}×${it.remaining}" })
-            }
-        }
-    }
-
-    // Opponent discards (3 bots).
-    OpponentDiscardsPanel(trainer = trainer)
-
-    // Tile pool — every tile with its remaining unseen count.
-    TilePoolPanel(unseen = trainer.unseenByTile())
-
-    if (adviceTurns.isNotEmpty() || adviceError != null || loadingAdvice) {
-        AiConversation(
-            title = "AI 教练建议",
-            turns = adviceTurns,
-            loading = loadingAdvice,
-            error = adviceError,
-            onRetry = onRetryAdvice,
-            onFollowUp = onFollowUpAdvice,
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            onContainerColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
     }
 }
 
@@ -530,24 +711,75 @@ private fun PlayingContent(
 private fun OpponentDiscardsPanel(trainer: SichuanTrainer) {
     val labels = listOf("下家", "对家", "上家")
     val views = trainer.opponentViews()
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text("对家弃牌", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
-            views.forEachIndexed { i, v ->
-                val tag = buildString {
-                    append(labels.getOrNull(i) ?: "P${i + 1}")
-                    v.missing?.let { append(" 缺${it.cn}") }
-                    append("  |  ")
-                    append(
-                        if (v.discards.isEmpty()) "尚未出牌"
-                        else v.discards.joinToString(" ") { it.label },
-                    )
+    val c = BrandTheme.colors
+    BrandSurface {
+        Eyebrow("对家弃牌轨迹")
+        Spacer(Modifier.height(10.dp))
+        views.forEachIndexed { i, v ->
+            // Crude danger tint based on number of discards — approximation
+            // until a real safety score is wired in.
+            val dangerTone = when {
+                v.discards.size >= 7 -> c.bad
+                v.discards.size >= 4 -> c.accentBright
+                else -> c.good
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(
+                    Modifier
+                        .width(3.dp)
+                        .height(48.dp)
+                        .background(dangerTone, RoundedCornerShape(2.dp)),
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            labels.getOrNull(i) ?: "P${i + 1}",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = c.fg,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        v.missing?.let {
+                            BrandChip("缺${it.cn}", tone = ChipTone.Outline)
+                        }
+                        BrandChip("弃 ${v.discards.size}", tone = ChipTone.Outline)
+                    }
+                    if (v.discards.isEmpty()) {
+                        Text(
+                            "尚未出牌",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = c.fgSubtle,
+                        )
+                    } else {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            v.discards.forEach { tile ->
+                                MahjongTileView(
+                                    suit = when (tile.suit) {
+                                        Suit.WAN -> MjSuit.Wan
+                                        Suit.TIAO -> MjSuit.Tiao
+                                        Suit.TONG -> MjSuit.Tong
+                                    },
+                                    number = tile.number,
+                                    size = TileSize.Small,
+                                )
+                            }
+                        }
+                    }
                 }
-                Text(tag, style = MaterialTheme.typography.bodySmall)
-                if (i < views.lastIndex) Spacer(Modifier.height(4.dp))
+            }
+            if (i < views.lastIndex) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
             }
         }
     }
@@ -560,44 +792,60 @@ private fun OpponentDiscardsPanel(trainer: SichuanTrainer) {
  */
 @Composable
 private fun TilePoolPanel(unseen: Map<Tile, Int>) {
-    Card {
-        Column(Modifier.padding(16.dp)) {
-            Text(
-                "牌池剩余（每张最多 4）",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(6.dp))
-            Suit.entries.forEach { s ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        s.cn,
-                        modifier = Modifier.width(20.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = when (s) {
-                            Suit.WAN -> Color(0xFFB00020)
-                            Suit.TIAO -> Color(0xFF0E7C3A)
-                            Suit.TONG -> Color(0xFF1E5AA8)
-                        },
+    val c = BrandTheme.colors
+    BrandSurface {
+        Eyebrow("牌池剩余 · 每张最多 4")
+        Spacer(Modifier.height(10.dp))
+        Suit.entries.forEach { s ->
+            val suitColor = when (s) {
+                Suit.WAN -> c.suitRed
+                Suit.TIAO -> c.suitGreenTiao
+                Suit.TONG -> c.suitBlueTong
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    s.cn,
+                    modifier = Modifier.width(26.dp),
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontFamily = BrandDisplayFamily,
                         fontWeight = FontWeight.SemiBold,
-                    )
-                    for (n in 1..9) {
-                        val count = unseen[Tile(s, n)] ?: 0
+                        fontSize = 14.sp,
+                        color = suitColor,
+                    ),
+                )
+                for (n in 1..9) {
+                    val count = unseen[Tile(s, n)] ?: 0
+                    Column(
+                        Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         Text(
-                            "$n:$count",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = when (count) {
-                                0 -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
-                                1 -> MaterialTheme.colorScheme.tertiary
-                                else -> MaterialTheme.colorScheme.onSurface
-                            },
+                            n.toString(),
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontFamily = BrandMonoFamily,
+                                fontSize = 10.sp,
+                                color = c.fgSubtle,
+                            ),
+                        )
+                        Text(
+                            count.toString(),
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontFamily = BrandMonoFamily,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = when {
+                                    count == 0 -> c.fgSubtle.copy(alpha = 0.35f)
+                                    count <= 1 -> c.bad
+                                    else -> c.fg
+                                },
+                            ),
                         )
                     }
                 }
-                Spacer(Modifier.height(2.dp))
             }
         }
     }
@@ -608,30 +856,38 @@ private fun TilePoolPanel(unseen: Map<Tile, Int>) {
  * to scan than a single FlowRow when the hand has 13–14 tiles.
  */
 @Composable
-private fun HandBySuit(hand: List<Tile>, onDiscard: (Tile) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun HandBySuit(hand: List<Tile>, missing: Suit? = null, onDiscard: (Tile) -> Unit) {
+    val brand = BrandTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Suit.entries.forEach { s ->
             val rowTiles = hand.filter { it.suit == s }.sortedBy { it.number }
             if (rowTiles.isEmpty()) return@forEach
+            val suitColor = when (s) {
+                Suit.WAN -> brand.suitRed
+                Suit.TIAO -> brand.suitGreenTiao
+                Suit.TONG -> brand.suitBlueTong
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    s.cn,
-                    modifier = Modifier.width(22.dp),
-                    color = when (s) {
-                        Suit.WAN -> Color(0xFFB00020)
-                        Suit.TIAO -> Color(0xFF0E7C3A)
-                        Suit.TONG -> Color(0xFF1E5AA8)
-                    },
-                    fontWeight = FontWeight.SemiBold,
+                    if (missing == s) "${s.cn} (缺)" else s.cn,
+                    modifier = Modifier.width(46.dp),
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontFamily = BrandDisplayFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = suitColor,
+                    ),
                 )
                 FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    rowTiles.forEach { tile -> TileView(tile) { onDiscard(tile) } }
+                    rowTiles.forEach { tile ->
+                        TileView(tile, dim = missing == tile.suit) { onDiscard(tile) }
+                    }
                 }
             }
         }
@@ -639,29 +895,16 @@ private fun HandBySuit(hand: List<Tile>, onDiscard: (Tile) -> Unit) {
 }
 
 @Composable
-private fun TileView(tile: Tile, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(width = 44.dp, height = 60.dp)
-            .background(Color(0xFFFFFBEA), RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                tile.number.toString(),
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF111111),
-            )
-            Text(
-                tile.suit.cn,
-                style = MaterialTheme.typography.bodySmall,
-                color = when (tile.suit) {
-                    Suit.WAN -> Color(0xFFB00020)
-                    Suit.TIAO -> Color(0xFF0E7C3A)
-                    Suit.TONG -> Color(0xFF1E5AA8)
-                },
-            )
-        }
-    }
+private fun TileView(tile: Tile, dim: Boolean = false, onClick: () -> Unit) {
+    MahjongTileView(
+        suit = when (tile.suit) {
+            Suit.WAN -> MjSuit.Wan
+            Suit.TIAO -> MjSuit.Tiao
+            Suit.TONG -> MjSuit.Tong
+        },
+        number = tile.number,
+        size = TileSize.Default,
+        dim = dim,
+        onClick = onClick,
+    )
 }

@@ -51,46 +51,62 @@ fun StatsScreen(settings: AppSettings, onBack: () -> Unit) {
     val pokerEvents = remember(tab) { repo.loadPoker() }
     val mahjongEvents = remember(tab) { repo.loadMahjong() }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("训练统计") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
+    xyz.nextalone.cardtrainer.ui.components.WithDeviceMode { mode ->
+        val isPhone = mode == xyz.nextalone.cardtrainer.ui.components.DeviceMode.Phone
+        val eyebrow = "STATS · HUD"
+        val title = "训练统计"
+        val topRight: @Composable xyz.nextalone.cardtrainer.ui.components.RowScope_.() -> Unit = {
+            xyz.nextalone.cardtrainer.ui.components.BrandChip(
+                "德州 · ${pokerEvents.size}",
+                tone = if (tab == StatsTab.POKER) xyz.nextalone.cardtrainer.ui.components.ChipTone.Accent else xyz.nextalone.cardtrainer.ui.components.ChipTone.Outline,
+                onClick = { tab = StatsTab.POKER },
             )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = tab == StatsTab.POKER,
-                    onClick = { tab = StatsTab.POKER },
-                    label = { Text("德州扑克 (${pokerEvents.size})") },
-                )
-                FilterChip(
-                    selected = tab == StatsTab.MAHJONG,
-                    onClick = { tab = StatsTab.MAHJONG },
-                    label = { Text("四川麻将 (${mahjongEvents.size})") },
-                )
+            xyz.nextalone.cardtrainer.ui.components.BrandChip(
+                "麻将 · ${mahjongEvents.size}",
+                tone = if (tab == StatsTab.MAHJONG) xyz.nextalone.cardtrainer.ui.components.ChipTone.Accent else xyz.nextalone.cardtrainer.ui.components.ChipTone.Outline,
+                onClick = { tab = StatsTab.MAHJONG },
+            )
+        }
+        val body: @Composable () -> Unit = {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(
+                        horizontal = if (isPhone) 14.dp else 24.dp,
+                        vertical = if (isPhone) 12.dp else 18.dp,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(if (isPhone) 12.dp else 16.dp),
+            ) {
+                when (tab) {
+                    StatsTab.POKER -> PokerStatsContent(
+                        events = pokerEvents,
+                        onClear = { repo.clearPoker() },
+                    )
+                    StatsTab.MAHJONG -> MahjongStatsContent(
+                        events = mahjongEvents,
+                        onClear = { repo.clearMahjong() },
+                    )
+                }
             }
-
-            when (tab) {
-                StatsTab.POKER -> PokerStatsContent(
-                    events = pokerEvents,
-                    onClear = { repo.clearPoker() },
-                )
-                StatsTab.MAHJONG -> MahjongStatsContent(
-                    events = mahjongEvents,
-                    onClear = { repo.clearMahjong() },
-                )
-            }
+        }
+        if (isPhone) {
+            xyz.nextalone.cardtrainer.ui.components.PhoneShell(
+                eyebrow = eyebrow,
+                title = title,
+                onBack = onBack,
+                topRight = topRight,
+                body = body,
+            )
+        } else {
+            xyz.nextalone.cardtrainer.ui.components.DesktopShell(
+                eyebrow = eyebrow,
+                title = title,
+                windowLabel = "LLM Card Trainer · Stats",
+                onBack = onBack,
+                topRight = topRight,
+                body = body,
+            )
         }
     }
 }

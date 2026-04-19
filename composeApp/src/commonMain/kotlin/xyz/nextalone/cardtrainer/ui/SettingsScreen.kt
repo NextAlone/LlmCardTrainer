@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -58,23 +59,7 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
     var testResult by remember { mutableStateOf<TestResult?>(null) }
     val scope = rememberCoroutineScope()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("AI 教练设置") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(20.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
+    val formContent: @Composable () -> Unit = {
             if (!settingsEncrypted()) {
                 PlaintextStorageWarning()
             }
@@ -194,6 +179,39 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                     "• Key 与 Base URL 仅保存于本机（Android 端 EncryptedSharedPreferences / macOS java.util.prefs）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+    }
+
+    xyz.nextalone.cardtrainer.ui.components.WithDeviceMode { mode ->
+        val isPhone = mode == xyz.nextalone.cardtrainer.ui.components.DeviceMode.Phone
+        val body: @Composable () -> Unit = {
+            val maxW = if (isPhone) Modifier.fillMaxWidth() else Modifier.widthIn(max = 680.dp)
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(
+                        horizontal = if (isPhone) 16.dp else 32.dp,
+                        vertical = if (isPhone) 14.dp else 22.dp,
+                    ),
+            ) {
+                Column(maxW, verticalArrangement = Arrangement.spacedBy(14.dp)) { formContent() }
+            }
+        }
+        if (isPhone) {
+            xyz.nextalone.cardtrainer.ui.components.PhoneShell(
+                eyebrow = "PROVIDER · 配置",
+                title = "AI 教练设置",
+                onBack = onBack,
+                body = body,
+            )
+        } else {
+            xyz.nextalone.cardtrainer.ui.components.DesktopShell(
+                eyebrow = "PROVIDER · 配置",
+                title = "AI 教练设置",
+                windowLabel = "LLM Card Trainer · Settings",
+                onBack = onBack,
+                body = body,
             )
         }
     }
