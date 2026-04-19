@@ -44,6 +44,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -1451,10 +1452,18 @@ private fun MultiwayBottomBar(
     val streetClosed = !handOver && table.isStreetClosed
     val heroTurn = !handOver && !streetClosed && table.isHeroTurn
     Column(Modifier.fillMaxWidth()) {
+        val reached = buildSet {
+            add(Street.PREFLOP)
+            val cur = table.street
+            if (cur == Street.FLOP || cur == Street.TURN || cur == Street.RIVER || cur == Street.SHOWDOWN) add(Street.FLOP)
+            if (cur == Street.TURN || cur == Street.RIVER || cur == Street.SHOWDOWN) add(Street.TURN)
+            if (cur == Street.RIVER || cur == Street.SHOWDOWN) add(Street.RIVER)
+        }
         MultiwayScoreRow(
             scoreByStreet = scoreByStreet,
             current = table.street,
             selected = selectedStreet,
+            reached = reached,
             onSelect = onSelectStreet,
         )
         // Single bottom surface that switches mode by state:
@@ -1704,6 +1713,7 @@ private fun MultiwayScoreRow(
     scoreByStreet: Map<Street, List<Double>>,
     current: Street,
     selected: Street,
+    reached: Set<Street>,
     onSelect: (Street) -> Unit,
 ) {
     val streets = listOf(Street.PREFLOP, Street.FLOP, Street.TURN, Street.RIVER)
@@ -1716,12 +1726,14 @@ private fun MultiwayScoreRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         streets.forEach { s ->
+            val enabled = s in reached
             MultiwayScoreBadge(
                 label = streetLabel(s),
                 scores = scoreByStreet[s].orEmpty(),
                 highlighted = s == current,
                 isSelected = s == selected,
-                onClick = { onSelect(s) },
+                enabled = enabled,
+                onClick = { if (enabled) onSelect(s) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1734,6 +1746,7 @@ private fun MultiwayScoreBadge(
     scores: List<Double>,
     highlighted: Boolean,
     isSelected: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1748,6 +1761,7 @@ private fun MultiwayScoreBadge(
     }
     val shape = RoundedCornerShape(999.dp)
     val borderColor = when {
+        !enabled -> c.border
         isSelected -> c.accentBright
         highlighted -> c.accent.copy(alpha = 0.6f)
         else -> tint.copy(alpha = 0.5f)
@@ -1757,13 +1771,20 @@ private fun MultiwayScoreBadge(
         highlighted -> 1.5.dp
         else -> 1.dp
     }
+    val bgAlpha = when {
+        !enabled -> 0.02f
+        avg != null -> 0.12f
+        else -> 0.04f
+    }
+    val contentAlpha = if (enabled) 1f else 0.35f
     Row(
         modifier
             .clip(shape)
-            .background(tint.copy(alpha = if (avg != null) 0.12f else 0.04f))
+            .background(tint.copy(alpha = bgAlpha))
             .border(width = borderWidth, color = borderColor, shape = shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .let { if (enabled) it.clickable(onClick = onClick) else it }
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .alpha(contentAlpha),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
