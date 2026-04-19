@@ -471,7 +471,6 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
 }
 
 @Composable
-@Composable
 private fun PreflopHistoryCard(table: HoldemTable) {
     // Position order in a 6-max game, UTG first.
     val order = listOf(
