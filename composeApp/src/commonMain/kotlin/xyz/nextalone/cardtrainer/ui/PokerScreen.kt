@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -230,6 +231,8 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
             }
             situationTurns = seedTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
             situationError = null
+        } catch (c: CancellationException) {
+            throw c
         } catch (t: Throwable) {
             situationError = t.message ?: t::class.simpleName ?: "未知错误"
         } finally {
@@ -264,6 +267,8 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 )
             }
             situationTurns = priorTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+        } catch (c: CancellationException) {
+            throw c
         } catch (t: Throwable) {
             situationError = t.message ?: t::class.simpleName ?: "未知错误"
         } finally {
@@ -334,6 +339,8 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
             }
             evaluationTurns = seedTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
             evaluationError = null
+        } catch (c: CancellationException) {
+            throw c
         } catch (t: Throwable) {
             evaluationError = t.message ?: t::class.simpleName ?: "未知错误"
         } finally {
@@ -364,6 +371,8 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 )
             }
             evaluationTurns = priorTurns + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+        } catch (c: CancellationException) {
+            throw c
         } catch (t: Throwable) {
             evaluationError = t.message ?: t::class.simpleName ?: "未知错误"
         } finally {

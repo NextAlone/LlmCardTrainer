@@ -1,5 +1,6 @@
 package xyz.nextalone.cardtrainer.util
 
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.delay
 
 /**
@@ -10,6 +11,9 @@ import kotlinx.coroutines.delay
  * Defaults (3 attempts, 1.5s initial, ×2 factor) give: 1.5s → 3s → fail,
  * roughly 4.5s total added latency in the worst case — acceptable for a
  * single interactive coach request.
+ *
+ * CancellationException is re-thrown untouched so cooperative cancellation
+ * (e.g. composable leaving the composition) does not burn retry attempts.
  */
 suspend fun <T> withRetry(
     maxAttempts: Int = 3,
@@ -22,6 +26,8 @@ suspend fun <T> withRetry(
     repeat(maxAttempts) { attempt ->
         try {
             return block(attempt)
+        } catch (c: CancellationException) {
+            throw c
         } catch (t: Throwable) {
             lastError = t
             if (attempt == maxAttempts - 1) throw t
