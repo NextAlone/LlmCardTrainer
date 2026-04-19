@@ -76,10 +76,11 @@ data class MultiwayPokerSession(
     val userChoiceAmount: Int? = null,
     val situationTurns: List<ChatTurn> = emptyList(),
     val evaluationTurns: List<ChatTurn> = emptyList(),
+    val recapTurns: List<ChatTurn> = emptyList(),
     val showdown: ShowdownOutcome? = null,
 ) {
     companion object {
-        const val SCHEMA_VERSION = 1
+        const val SCHEMA_VERSION = 2
     }
 }
 

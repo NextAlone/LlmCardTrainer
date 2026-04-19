@@ -23,11 +23,14 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -35,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +46,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import xyz.nextalone.cardtrainer.coach.ChatTurn
+import xyz.nextalone.cardtrainer.coach.LlmProviders
+import xyz.nextalone.cardtrainer.coach.Prompts
 import xyz.nextalone.cardtrainer.engine.holdem.Action
 import xyz.nextalone.cardtrainer.engine.holdem.Card as PokerCard
 import xyz.nextalone.cardtrainer.engine.holdem.Deck
@@ -56,18 +66,24 @@ import xyz.nextalone.cardtrainer.engine.holdem.multiway.Showdown
 import xyz.nextalone.cardtrainer.engine.holdem.multiway.ShowdownOutcome
 import xyz.nextalone.cardtrainer.storage.AppSettings
 import xyz.nextalone.cardtrainer.util.nowEpochMs
+import xyz.nextalone.cardtrainer.util.withRetry
 
 /**
- * Multiway-engine screen — MVP. Drives [MultiwayEngine] end-to-end:
- *  - starts a new hand, auto-steps non-hero seats until hero acts,
- *  - renders seat states, board, hero hole cards, and history,
- *  - at showdown, runs [Showdown.run] and displays per-pot awards.
+ * Multiway-engine screen — MVP. Drives [MultiwayEngine] end-to-end and runs
+ * three independent coach analyses per street, shown in a Tab panel:
+ *  - A 情境：hero 行动前，基于前置位线给推荐；
+ *  - B 评分：hero 提交后，评估该选择；
+ *  - C 街总结：街闭合后，回顾整桌行动。
  *
- * No coach / equity / outs integration yet; that lands in a follow-up
- * once the engine baseline is validated.
+ * No coach / equity integration pieces from PokerScreen are reused; the goal
+ * is feature parity with the single-villain flow for training value, not
+ * code-level convergence. UI polish and stats split land in follow-up phases.
  */
 @Composable
 fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
+    val scope = rememberCoroutineScope()
+
+    // Engine state
     var handSeed by remember { mutableStateOf(nowEpochMs()) }
     var deck by remember(handSeed) { mutableStateOf(Deck(seed = handSeed)) }
     var table by remember(handSeed) {
@@ -81,19 +97,161 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         )
     }
     var outcome by remember(handSeed) { mutableStateOf<ShowdownOutcome?>(null) }
+    var userChoice by remember(handSeed) { mutableStateOf<Pair<Action, Int>?>(null) }
 
-    // Single-step the non-hero pipeline. Each state change recomposes and
-    // re-runs this effect, which advances exactly one phase: run villain
-    // seats, close a street, or compute the showdown.
+    // Three coach slots
+    var situationTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
+    var evaluationTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
+    var recapTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
+    var loadingSituation by remember(handSeed) { mutableStateOf(false) }
+    var loadingEvaluation by remember(handSeed) { mutableStateOf(false) }
+    var loadingRecap by remember(handSeed) { mutableStateOf(false) }
+    var errorSituation by remember(handSeed) { mutableStateOf<String?>(null) }
+    var errorEvaluation by remember(handSeed) { mutableStateOf<String?>(null) }
+    var errorRecap by remember(handSeed) { mutableStateOf<String?>(null) }
+
+    // Trigger gating — each analysis fires at most once per (hand, street).
+    var situationFor by remember(handSeed) { mutableStateOf<Street?>(null) }
+    var recapFor by remember(handSeed) { mutableStateOf<Street?>(null) }
+
+    // Tab: 0=A situation, 1=B evaluation, 2=C recap
+    var activeTab by remember(handSeed) { mutableStateOf(0) }
+
+    suspend fun runSituation(forTable: MultiwayTable) {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            errorSituation = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        loadingSituation = true
+        errorSituation = null
+        val seed = listOf(
+            ChatTurn(
+                ChatTurn.Role.USER,
+                Prompts.holdemUser(
+                    table = forTable,
+                    equityPct = null,
+                    preflopBaseline = null,
+                    outs = null,
+                    userChoice = null,
+                    mode = Prompts.MultiwayAnalysisMode.SITUATION,
+                ),
+            ),
+        )
+        val coach = LlmProviders.create(cfg)
+        try {
+            val reply = withRetry {
+                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            }
+            situationTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            errorSituation = t.message ?: t::class.simpleName ?: "未知错误"
+        } finally {
+            coach.close()
+            loadingSituation = false
+        }
+    }
+
+    suspend fun runEvaluation(forTable: MultiwayTable, choice: Pair<Action, Int>) {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            errorEvaluation = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        loadingEvaluation = true
+        errorEvaluation = null
+        val seed = listOf(
+            ChatTurn(
+                ChatTurn.Role.USER,
+                Prompts.holdemUser(
+                    table = forTable,
+                    equityPct = null,
+                    preflopBaseline = null,
+                    outs = null,
+                    userChoice = choice,
+                    mode = Prompts.MultiwayAnalysisMode.EVALUATION,
+                ),
+            ),
+        )
+        val coach = LlmProviders.create(cfg)
+        try {
+            val reply = withRetry {
+                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            }
+            evaluationTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            errorEvaluation = t.message ?: t::class.simpleName ?: "未知错误"
+        } finally {
+            coach.close()
+            loadingEvaluation = false
+        }
+    }
+
+    suspend fun runRecap(snapshot: MultiwayTable) {
+        val cfg = settings.activeConfig()
+        if (cfg.apiKey.isBlank()) {
+            errorRecap = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            return
+        }
+        loadingRecap = true
+        errorRecap = null
+        val seed = listOf(
+            ChatTurn(
+                ChatTurn.Role.USER,
+                Prompts.holdemUser(
+                    table = snapshot,
+                    equityPct = null,
+                    preflopBaseline = null,
+                    outs = null,
+                    userChoice = userChoice,
+                    mode = Prompts.MultiwayAnalysisMode.STREET_RECAP,
+                ),
+            ),
+        )
+        val coach = LlmProviders.create(cfg)
+        try {
+            val reply = withRetry {
+                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            }
+            recapTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            errorRecap = t.message ?: t::class.simpleName ?: "未知错误"
+        } finally {
+            coach.close()
+            loadingRecap = false
+        }
+    }
+
+    // Auto-step villain seats / advance streets / resolve showdown.
+    // When a street closes (or the hand ends), kick off Recap before moving
+    // on so the snapshot captures per-street contribs before they reset.
     LaunchedEffect(table, handSeed) {
         val current = table
         if (MultiwayEngine.isHandOver(current)) {
-            if (outcome == null) outcome = Showdown.run(current)
+            if (outcome == null) {
+                outcome = Showdown.run(current)
+                if (recapFor != current.street) {
+                    recapFor = current.street
+                    val snap = current
+                    scope.launch { runRecap(snap) }
+                }
+            }
             return@LaunchedEffect
         }
         if (current.isHeroTurn) return@LaunchedEffect
         if (current.isStreetClosed) {
             delay(200)
+            if (recapFor != current.street) {
+                recapFor = current.street
+                val snap = current
+                scope.launch { runRecap(snap) }
+            }
             if (current.street == Street.RIVER) {
                 val atShowdown = current.copy(street = Street.SHOWDOWN)
                 table = atShowdown
@@ -107,6 +265,35 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         table = MultiwayEngine.stepUntilHero(current, rng = kotlin.random.Random.Default)
     }
 
+    // Situation trigger: runs once per (hand, street) as soon as it becomes
+    // hero's turn on a fresh street. A new street resets situationFor via
+    // the handSeed-keyed remember + an equality compare below.
+    LaunchedEffect(table.isHeroTurn, table.street, handSeed) {
+        if (table.isHeroTurn && situationFor != table.street) {
+            situationFor = table.street
+            runSituation(table)
+        }
+    }
+
+    fun startNewHand() {
+        scope.coroutineContext.cancelChildren()
+        handSeed = nowEpochMs()
+        deck = Deck(seed = handSeed)
+        outcome = null
+    }
+
+    fun submitAction(action: Action, amount: Int) {
+        val choice = action to amount
+        userChoice = choice
+        val snapForEval = table
+        table = MultiwayEngine.applyHeroAction(table, action, amount)
+        // Evaluation is computed against the pre-action table snapshot so the
+        // prompt reflects the state the user was facing, not the post-action
+        // state where pot/toCall have already moved.
+        scope.launch { runEvaluation(snapForEval, choice) }
+        activeTab = 1
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -117,11 +304,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        handSeed = nowEpochMs()
-                        deck = Deck(seed = handSeed)
-                        outcome = null
-                    }) {
+                    IconButton(onClick = ::startNewHand) {
                         Icon(Icons.Filled.Refresh, contentDescription = "新牌局")
                     }
                 },
@@ -144,21 +327,13 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             if (outcome != null) {
                 OutcomeCard(outcome!!, table)
                 Button(
-                    onClick = {
-                        handSeed = nowEpochMs()
-                        deck = Deck(seed = handSeed)
-                        outcome = null
-                    },
+                    onClick = ::startNewHand,
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("开始下一手")
-                }
+                ) { Text("开始下一手") }
             } else if (table.isHeroTurn) {
                 HeroActionPanel(
                     table = table,
-                    onAction = { action, amount ->
-                        table = MultiwayEngine.applyHeroAction(table, action, amount)
-                    },
+                    onAction = ::submitAction,
                 )
             } else {
                 Text(
@@ -167,6 +342,20 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+
+            CoachTabs(
+                activeTab = activeTab,
+                onTab = { activeTab = it },
+                situationTurns = situationTurns,
+                evaluationTurns = evaluationTurns,
+                recapTurns = recapTurns,
+                loadingSituation = loadingSituation,
+                loadingEvaluation = loadingEvaluation,
+                loadingRecap = loadingRecap,
+                errorSituation = errorSituation,
+                errorEvaluation = errorEvaluation,
+                errorRecap = errorRecap,
+            )
         }
     }
 }
@@ -183,7 +372,11 @@ private fun PotAndStreetCard(table: MultiwayTable) {
         ) {
             LabelValue("街道", streetLabel(table.street))
             LabelValue("底池", table.pot.toString())
-            LabelValue("轮到", if (table.isHeroTurn) "你" else table.seats.getOrNull(table.toActIndex)?.position?.label ?: "—")
+            LabelValue(
+                "轮到",
+                if (table.isHeroTurn) "你"
+                else table.seats.getOrNull(table.toActIndex)?.position?.label ?: "—",
+            )
         }
     }
 }
@@ -379,6 +572,103 @@ private fun HeroActionPanel(table: MultiwayTable, onAction: (Action, Int) -> Uni
                     OutlinedButton(onClick = { onAction(Action.ALL_IN, 0) }) { Text("全下") }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CoachTabs(
+    activeTab: Int,
+    onTab: (Int) -> Unit,
+    situationTurns: List<ChatTurn>,
+    evaluationTurns: List<ChatTurn>,
+    recapTurns: List<ChatTurn>,
+    loadingSituation: Boolean,
+    loadingEvaluation: Boolean,
+    loadingRecap: Boolean,
+    errorSituation: String?,
+    errorEvaluation: String?,
+    errorRecap: String?,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            TabRow(selectedTabIndex = activeTab) {
+                Tab(
+                    selected = activeTab == 0,
+                    onClick = { onTab(0) },
+                    text = { Text("A 情境") },
+                )
+                Tab(
+                    selected = activeTab == 1,
+                    onClick = { onTab(1) },
+                    text = { Text("B 评分") },
+                )
+                Tab(
+                    selected = activeTab == 2,
+                    onClick = { onTab(2) },
+                    text = { Text("C 街总结") },
+                )
+            }
+            when (activeTab) {
+                0 -> CoachPane(
+                    turns = situationTurns,
+                    loading = loadingSituation,
+                    error = errorSituation,
+                    emptyHint = "等待轮到你，或本街情境分析加载中…",
+                )
+                1 -> CoachPane(
+                    turns = evaluationTurns,
+                    loading = loadingEvaluation,
+                    error = errorEvaluation,
+                    emptyHint = "提交本街动作后，将评估你的选择。",
+                )
+                else -> CoachPane(
+                    turns = recapTurns,
+                    loading = loadingRecap,
+                    error = errorRecap,
+                    emptyHint = "街结束后给出全桌回顾。",
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CoachPane(
+    turns: List<ChatTurn>,
+    loading: Boolean,
+    error: String?,
+    emptyHint: String,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        val assistant = turns.lastOrNull { it.role == ChatTurn.Role.ASSISTANT }?.content
+        when {
+            error != null -> Text(
+                "⚠ $error",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            loading -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                )
+                Text("分析中…", style = MaterialTheme.typography.bodySmall)
+            }
+            assistant != null -> Text(assistant, style = MaterialTheme.typography.bodyMedium)
+            else -> Text(
+                emptyHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

@@ -120,6 +120,15 @@ object Prompts {
     }
 
     /**
+     * Analysis slots for the multiway screen. Each produces a different tail
+     * instruction and is shown in its own tab:
+     *  - SITUATION: no decision yet — give a recommendation;
+     *  - EVALUATION: decision submitted — grade it;
+     *  - STREET_RECAP: street closed — summarise the whole table's line.
+     */
+    enum class MultiwayAnalysisMode { SITUATION, EVALUATION, STREET_RECAP }
+
+    /**
      * Multiway overload. Differs from the heads-up prompt in how villain info
      * is framed: we enumerate every live opponent's position + remaining stack
      * and reconstruct the action line with per-seat actors so the coach can
@@ -134,6 +143,11 @@ object Prompts {
         madeHand: HandCategory? = null,
         draws: List<DrawSummary> = emptyList(),
         userChoice: Pair<Action, Int>? = null,
+        mode: MultiwayAnalysisMode = if (userChoice != null) {
+            MultiwayAnalysisMode.EVALUATION
+        } else {
+            MultiwayAnalysisMode.SITUATION
+        },
     ): String = buildString {
         val hero = table.hero
         val heroCards = hero.cards
@@ -188,10 +202,23 @@ object Prompts {
             val (act, amt) = userChoice
             val amtText = if (amt > 0) " $amt" else ""
             append("【用户做出的决策】${act.label}$amtText\n")
-            append("请按模式 (B) 评估该决策。")
-        } else {
-            append("请按模式 (A) 给出本街的推荐决策与理由。")
         }
+        val tail = when (mode) {
+            MultiwayAnalysisMode.SITUATION ->
+                "请按模式 (A) 给出本街的推荐决策与理由。" +
+                    "重点说明前置位动作如何收窄他们的 range、从而影响你的最佳反应。" +
+                    "本次不输出首行的『【评分】』。"
+            MultiwayAnalysisMode.EVALUATION ->
+                "请按模式 (B) 评估该决策。"
+            MultiwayAnalysisMode.STREET_RECAP ->
+                "本街所有玩家的行动均已完成。请给出全桌回顾：\n" +
+                    "1. 逐家简述其行动是否符合合理 range / 位置基线，指出明显偏差；\n" +
+                    "2. 底池演化与 SPR 变化对后续街的影响；\n" +
+                    "3. 你（hero）本街的整体贡献价值（EV 感）与可改进的地方。\n" +
+                    "若牌局已结束，只回顾至此街；不要预测尚未翻出的公共牌。" +
+                    "本次不输出首行的『【评分】』。"
+        }
+        append(tail)
     }
 
     val MAHJONG_SYSTEM = """
