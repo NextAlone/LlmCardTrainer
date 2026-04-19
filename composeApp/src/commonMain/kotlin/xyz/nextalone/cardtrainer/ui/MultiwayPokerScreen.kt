@@ -122,19 +122,44 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     var equityPct by remember(handSeed) { mutableStateOf<Double?>(null) }
     var outs by remember(handSeed) { mutableStateOf<OutsReport?>(null) }
 
-    var situationTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
-    var evaluationTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
-    var recapTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
+    // Per-street caches for A/B/C so switching streets reveals the cached
+    // content instead of re-running the coach. Hand-scoped; wiped on new
+    // hand via remember(handSeed).
+    var situationByStreet by remember(handSeed) {
+        mutableStateOf<Map<Street, List<ChatTurn>>>(emptyMap())
+    }
+    var evaluationByStreet by remember(handSeed) {
+        mutableStateOf<Map<Street, List<ChatTurn>>>(emptyMap())
+    }
+    var recapByStreet by remember(handSeed) {
+        mutableStateOf<Map<Street, List<ChatTurn>>>(emptyMap())
+    }
+    var situationLoadingFor by remember(handSeed) { mutableStateOf<Set<Street>>(emptySet()) }
+    var evaluationLoadingFor by remember(handSeed) { mutableStateOf<Set<Street>>(emptySet()) }
+    var recapLoadingFor by remember(handSeed) { mutableStateOf<Set<Street>>(emptySet()) }
+    var situationErrorByStreet by remember(handSeed) {
+        mutableStateOf<Map<Street, String>>(emptyMap())
+    }
+    var evaluationErrorByStreet by remember(handSeed) {
+        mutableStateOf<Map<Street, String>>(emptyMap())
+    }
+    var recapErrorByStreet by remember(handSeed) {
+        mutableStateOf<Map<Street, String>>(emptyMap())
+    }
+
     var handRecapTurns by remember(handSeed) { mutableStateOf<List<ChatTurn>>(emptyList()) }
-    var loadingSituation by remember(handSeed) { mutableStateOf(false) }
-    var loadingEvaluation by remember(handSeed) { mutableStateOf(false) }
-    var loadingRecap by remember(handSeed) { mutableStateOf(false) }
     var loadingHandRecap by remember(handSeed) { mutableStateOf(false) }
-    var errorSituation by remember(handSeed) { mutableStateOf<String?>(null) }
-    var errorEvaluation by remember(handSeed) { mutableStateOf<String?>(null) }
-    var errorRecap by remember(handSeed) { mutableStateOf<String?>(null) }
     var errorHandRecap by remember(handSeed) { mutableStateOf<String?>(null) }
     var handRecapFired by remember(handSeed) { mutableStateOf(false) }
+
+    // The street the user is currently viewing in the coach panes. Tracks
+    // table.street automatically so fresh streets auto-focus; clicking a
+    // score badge overrides to let the user time-travel back to an earlier
+    // street on the same hand.
+    var selectedStreet by remember(handSeed) { mutableStateOf(Street.PREFLOP) }
+    LaunchedEffect(table.street, handSeed) {
+        selectedStreet = table.street
+    }
 
     // Per-street gating so each coach slot fires at most once.
     var situationFor by remember(handSeed) { mutableStateOf<Street?>(null) }
@@ -163,13 +188,15 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     var resultRecordedFor by remember { mutableStateOf<Long?>(null) }
 
     suspend fun runSituation(forTable: MultiwayTable) {
+        val street = forTable.street
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
-            errorSituation = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            situationErrorByStreet = situationErrorByStreet +
+                (street to "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。")
             return
         }
-        loadingSituation = true
-        errorSituation = null
+        situationLoadingFor = situationLoadingFor + street
+        situationErrorByStreet = situationErrorByStreet - street
         val seed = listOf(
             ChatTurn(
                 ChatTurn.Role.USER,
@@ -194,14 +221,16 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             val reply = withRetry {
                 coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
-            situationTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+            situationByStreet = situationByStreet +
+                (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)))
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
-            errorSituation = t.message ?: t::class.simpleName ?: "未知错误"
+            situationErrorByStreet = situationErrorByStreet +
+                (street to (t.message ?: t::class.simpleName ?: "未知错误"))
         } finally {
             coach.close()
-            loadingSituation = false
+            situationLoadingFor = situationLoadingFor - street
         }
     }
 
@@ -212,11 +241,12 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     ) {
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
-            errorEvaluation = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            evaluationErrorByStreet = evaluationErrorByStreet +
+                (forStreet to "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。")
             return
         }
-        loadingEvaluation = true
-        errorEvaluation = null
+        evaluationLoadingFor = evaluationLoadingFor + forStreet
+        evaluationErrorByStreet = evaluationErrorByStreet - forStreet
         val seed = listOf(
             ChatTurn(
                 ChatTurn.Role.USER,
@@ -228,7 +258,8 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             val reply = withRetry {
                 coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
-            evaluationTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+            evaluationByStreet = evaluationByStreet +
+                (forStreet to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)))
             val parsed = parseMultiScores(reply, submissions.size)
             if (parsed.isNotEmpty()) {
                 scoreByStreet = scoreByStreet + (forStreet to parsed)
@@ -236,10 +267,11 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
-            errorEvaluation = t.message ?: t::class.simpleName ?: "未知错误"
+            evaluationErrorByStreet = evaluationErrorByStreet +
+                (forStreet to (t.message ?: t::class.simpleName ?: "未知错误"))
         } finally {
             coach.close()
-            loadingEvaluation = false
+            evaluationLoadingFor = evaluationLoadingFor - forStreet
         }
     }
 
@@ -281,13 +313,15 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     }
 
     suspend fun runRecap(snapshot: MultiwayTable) {
+        val street = snapshot.street
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
-            errorRecap = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            recapErrorByStreet = recapErrorByStreet +
+                (street to "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。")
             return
         }
-        loadingRecap = true
-        errorRecap = null
+        recapLoadingFor = recapLoadingFor + street
+        recapErrorByStreet = recapErrorByStreet - street
         val seed = listOf(
             ChatTurn(
                 ChatTurn.Role.USER,
@@ -306,14 +340,16 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             val reply = withRetry {
                 coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
-            recapTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+            recapByStreet = recapByStreet +
+                (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)))
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
-            errorRecap = t.message ?: t::class.simpleName ?: "未知错误"
+            recapErrorByStreet = recapErrorByStreet +
+                (street to (t.message ?: t::class.simpleName ?: "未知错误"))
         } finally {
             coach.close()
-            loadingRecap = false
+            recapLoadingFor = recapLoadingFor - street
         }
     }
 
@@ -500,6 +536,8 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 table = table,
                 outcome = outcome,
                 scoreByStreet = scoreByStreet,
+                selectedStreet = selectedStreet,
+                onSelectStreet = { selectedStreet = it },
                 onSubmit = ::submitAction,
                 onNewHand = ::startNewHand,
                 onAdvanceStreet = ::advanceStreet,
@@ -540,19 +578,23 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     CoachTabsBlock(
                         activeTab = activeTab,
                         onTab = { activeTab = it },
-                        situationTurns = situationTurns,
-                        evaluationTurns = evaluationTurns,
-                        recapTurns = recapTurns,
+                        selectedStreet = selectedStreet,
+                        currentStreet = table.street,
+                        situationTurns = situationByStreet[selectedStreet].orEmpty(),
+                        evaluationTurns = evaluationByStreet[selectedStreet].orEmpty(),
+                        recapTurns = recapByStreet[selectedStreet].orEmpty(),
                         handRecapTurns = handRecapTurns,
-                        loadingSituation = loadingSituation,
-                        loadingEvaluation = loadingEvaluation,
-                        loadingRecap = loadingRecap,
+                        loadingSituation = selectedStreet in situationLoadingFor,
+                        loadingEvaluation = selectedStreet in evaluationLoadingFor,
+                        loadingRecap = selectedStreet in recapLoadingFor,
                         loadingHandRecap = loadingHandRecap,
-                        errorSituation = errorSituation,
-                        errorEvaluation = errorEvaluation,
-                        errorRecap = errorRecap,
+                        errorSituation = situationErrorByStreet[selectedStreet],
+                        errorEvaluation = evaluationErrorByStreet[selectedStreet],
+                        errorRecap = recapErrorByStreet[selectedStreet],
                         errorHandRecap = errorHandRecap,
-                        situationRevealed = revealedFor == table.street || outcome != null,
+                        situationRevealed = (revealedFor != null && selectedStreet == revealedFor) ||
+                            (selectedStreet != table.street) ||
+                            outcome != null,
                         handSettled = outcome != null,
                     )
                     // Spacer so the last card isn't hidden under the pinned bar.
@@ -564,7 +606,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             // Opponent count is already shown in the TableStrip header, so
             // the top bar only carries transient AI state to avoid chip
             // duplication.
-            if (loadingSituation) BrandChip("AI 预载", tone = ChipTone.Accent)
+            if (situationLoadingFor.isNotEmpty()) BrandChip("AI 预载", tone = ChipTone.Accent)
         }
         val eyebrow = "HOLD'EM MULTIWAY · ${table.hero.position.label} · ${streetLabel(table.street)}"
         val title = "多人训练（实验引擎）"
@@ -1244,6 +1286,8 @@ private fun OutcomeBlock(outcome: ShowdownOutcome, table: MultiwayTable) {
 private fun CoachTabsBlock(
     activeTab: Int,
     onTab: (Int) -> Unit,
+    selectedStreet: Street,
+    currentStreet: Street,
     situationTurns: List<ChatTurn>,
     evaluationTurns: List<ChatTurn>,
     recapTurns: List<ChatTurn>,
@@ -1260,7 +1304,12 @@ private fun CoachTabsBlock(
     handSettled: Boolean,
 ) {
     BrandSurface {
-        Eyebrow("AI 教练 · 四视角")
+        val eyebrowLabel = if (selectedStreet != currentStreet) {
+            "AI 教练 · ${streetLabel(selectedStreet)}（回看）"
+        } else {
+            "AI 教练 · ${streetLabel(selectedStreet)}"
+        }
+        Eyebrow(eyebrowLabel)
         Spacer(Modifier.height(10.dp))
         TabRow(selectedTabIndex = activeTab) {
             Tab(selected = activeTab == 0, onClick = { onTab(0) }, text = { Text("A 情境") })
@@ -1387,6 +1436,8 @@ private fun MultiwayBottomBar(
     table: MultiwayTable,
     outcome: ShowdownOutcome?,
     scoreByStreet: Map<Street, List<Double>>,
+    selectedStreet: Street,
+    onSelectStreet: (Street) -> Unit,
     onSubmit: (Action, Int) -> Unit,
     onNewHand: () -> Unit,
     onAdvanceStreet: () -> Unit,
@@ -1395,7 +1446,12 @@ private fun MultiwayBottomBar(
     val streetClosed = !handOver && table.isStreetClosed
     val heroTurn = !handOver && !streetClosed && table.isHeroTurn
     Column(Modifier.fillMaxWidth()) {
-        MultiwayScoreRow(scoreByStreet = scoreByStreet, current = table.street)
+        MultiwayScoreRow(
+            scoreByStreet = scoreByStreet,
+            current = table.street,
+            selected = selectedStreet,
+            onSelect = onSelectStreet,
+        )
         if (heroTurn) {
             MultiwayActionSheet(table = table, onSubmit = onSubmit)
         }
@@ -1648,6 +1704,8 @@ private fun streetLabel(street: Street): String = when (street) {
 private fun MultiwayScoreRow(
     scoreByStreet: Map<Street, List<Double>>,
     current: Street,
+    selected: Street,
+    onSelect: (Street) -> Unit,
 ) {
     val streets = listOf(Street.PREFLOP, Street.FLOP, Street.TURN, Street.RIVER)
     Row(
@@ -1663,6 +1721,8 @@ private fun MultiwayScoreRow(
                 label = streetLabel(s),
                 scores = scoreByStreet[s].orEmpty(),
                 highlighted = s == current,
+                isSelected = s == selected,
+                onClick = { onSelect(s) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1674,6 +1734,8 @@ private fun MultiwayScoreBadge(
     label: String,
     scores: List<Double>,
     highlighted: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val c = BrandTheme.colors
@@ -1686,15 +1748,22 @@ private fun MultiwayScoreBadge(
         else -> c.bad
     }
     val shape = RoundedCornerShape(999.dp)
+    val borderColor = when {
+        isSelected -> c.accentBright
+        highlighted -> c.accent.copy(alpha = 0.6f)
+        else -> tint.copy(alpha = 0.5f)
+    }
+    val borderWidth = when {
+        isSelected -> 2.dp
+        highlighted -> 1.5.dp
+        else -> 1.dp
+    }
     Row(
         modifier
             .clip(shape)
             .background(tint.copy(alpha = if (avg != null) 0.12f else 0.04f))
-            .border(
-                width = if (highlighted) 1.5.dp else 1.dp,
-                color = if (highlighted) c.accent.copy(alpha = 0.6f) else tint.copy(alpha = 0.5f),
-                shape = shape,
-            )
+            .border(width = borderWidth, color = borderColor, shape = shape)
+            .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
