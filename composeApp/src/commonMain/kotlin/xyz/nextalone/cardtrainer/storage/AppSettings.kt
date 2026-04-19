@@ -53,3 +53,10 @@ class AppSettings(private val settings: Settings) {
 }
 
 expect fun provideSettings(): Settings
+
+/**
+ * Whether [provideSettings] currently persists to an OS-backed encrypted store
+ * (Android Keystore / platform keychain). If false, values — including API keys —
+ * land on disk in plaintext and the UI should warn the user.
+ */
+expect fun settingsEncrypted(): Boolean

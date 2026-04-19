@@ -44,6 +44,7 @@ import xyz.nextalone.cardtrainer.coach.ProviderKind
 import xyz.nextalone.cardtrainer.coach.TestResult
 import xyz.nextalone.cardtrainer.coach.testConnection
 import xyz.nextalone.cardtrainer.storage.AppSettings
+import xyz.nextalone.cardtrainer.storage.settingsEncrypted
 
 @Composable
 fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
@@ -74,6 +75,10 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            if (!settingsEncrypted()) {
+                PlaintextStorageWarning()
+            }
+
             Text("接口类型（编辑 / 切换）", style = MaterialTheme.typography.labelMedium)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ProviderKind.entries.forEach { kind ->
@@ -189,6 +194,26 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                     "• Key 与 Base URL 仅保存于本机（Android 端 EncryptedSharedPreferences / macOS java.util.prefs）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaintextStorageWarning() {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("⚠️ API Key 当前以明文存储", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.size(4.dp))
+            Text(
+                "此设备未启用加密存储（macOS 桌面端暂未接入 Keychain；Android 端 Keystore 初始化失败时会退回到明文）。" +
+                    "共享电脑或 root 设备上请谨慎填写生产 Key。",
+                style = MaterialTheme.typography.bodySmall,
             )
         }
     }
