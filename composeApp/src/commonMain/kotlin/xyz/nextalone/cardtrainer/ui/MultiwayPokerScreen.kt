@@ -268,6 +268,11 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         }
     }
 
+    // Auto-pilot — villain seats step until hero acts or the street closes.
+    // Street transitions are NOT automatic: once the street is closed the
+    // screen waits for the user to press '发下一街' so they have time to read
+    // the A/B/C coach panes without them getting overwritten by the next
+    // street's fresh analyses.
     LaunchedEffect(table, handSeed) {
         val current = table
         if (MultiwayEngine.isHandOver(current)) {
@@ -283,23 +288,27 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         }
         if (current.isHeroTurn) return@LaunchedEffect
         if (current.isStreetClosed) {
-            delay(200)
             if (recapFor != current.street) {
                 recapFor = current.street
                 val snap = current
                 scope.launch { runRecap(snap) }
             }
-            if (current.street == Street.RIVER) {
-                val atShowdown = current.copy(street = Street.SHOWDOWN)
-                table = atShowdown
-                outcome = Showdown.run(atShowdown)
-                return@LaunchedEffect
-            }
-            table = MultiwayEngine.advanceStreet(current, deck)
             return@LaunchedEffect
         }
         delay(300)
         table = MultiwayEngine.stepUntilHero(current, rng = kotlin.random.Random.Default)
+    }
+
+    fun advanceStreet() {
+        val current = table
+        if (!current.isStreetClosed || MultiwayEngine.isHandOver(current)) return
+        if (current.street == Street.RIVER) {
+            val atShowdown = current.copy(street = Street.SHOWDOWN)
+            table = atShowdown
+            outcome = Showdown.run(atShowdown)
+        } else {
+            table = MultiwayEngine.advanceStreet(current, deck)
+        }
     }
 
     // Equity + outs recompute on street / board / hero change. Multiway Equity
@@ -397,6 +406,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 outcome = outcome,
                 onSubmit = ::submitAction,
                 onNewHand = ::startNewHand,
+                onAdvanceStreet = ::advanceStreet,
             )
         }
 
@@ -875,25 +885,47 @@ private fun MultiwayBottomBar(
     outcome: ShowdownOutcome?,
     onSubmit: (Action, Int) -> Unit,
     onNewHand: () -> Unit,
+    onAdvanceStreet: () -> Unit,
 ) {
+    val handOver = outcome != null
+    val streetClosed = !handOver && table.isStreetClosed
+    val heroTurn = !handOver && !streetClosed && table.isHeroTurn
     Column(Modifier.fillMaxWidth()) {
-        if (outcome == null && table.isHeroTurn) {
+        if (heroTurn) {
             MultiwayActionSheet(table = table, onSubmit = onSubmit)
         }
         PinnedActionBar {
-            if (outcome != null) {
-                Spacer(Modifier.weight(1f))
-                Button(onClick = onNewHand) { Text("开始下一手") }
-            } else {
-                if (!table.isHeroTurn) {
+            when {
+                handOver -> {
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(onClick = onNewHand) { Text("新牌局") }
+                    Button(onClick = onNewHand) { Text("开始下一手") }
+                }
+                streetClosed -> {
+                    Text(
+                        "本街结束 · 查看 A/B/C 分析后继续",
+                        color = BrandTheme.colors.fgMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(onClick = onNewHand) { Text("新牌局") }
+                    Button(onClick = onAdvanceStreet) {
+                        Text(if (table.street == Street.RIVER) "摊牌" else "发下一街")
+                    }
+                }
+                heroTurn -> {
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(onClick = onNewHand) { Text("新牌局") }
+                }
+                else -> {
                     Text(
                         "等待 ${table.seats.getOrNull(table.toActIndex)?.position?.label ?: "…"} 行动",
                         color = BrandTheme.colors.fgMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(onClick = onNewHand) { Text("新牌局") }
                 }
-                Spacer(Modifier.weight(1f))
-                OutlinedButton(onClick = onNewHand) { Text("新牌局") }
             }
         }
     }
