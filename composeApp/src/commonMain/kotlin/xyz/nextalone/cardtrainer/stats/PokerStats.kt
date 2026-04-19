@@ -15,10 +15,18 @@ data class PokerStats(
     val postflopFoldRate: Double,
     val rfiDeviationRate: Double,
     val avgBetSizePot: Double,
+    /** % of concluded hands where hero won (fold-in, villain-fold, showdown win). */
+    val winRate: Double,
+    /** Resolution breakdown: how hands ended, as percentages of concluded hands. */
+    val foldRate: Double,
+    val villainFoldRate: Double,
+    val showdownRate: Double,
+    /** Average equity at decision time, for comparison to realized win rate. */
+    val avgEquityPct: Double,
     val recentWindow: List<WindowBucket>,
 ) {
     /** 20-hand rolling buckets so the UI can draw a trend. */
-    data class WindowBucket(val endIndex: Int, val vpip: Double, val pfr: Double)
+    data class WindowBucket(val endIndex: Int, val vpip: Double, val pfr: Double, val winRate: Double)
 }
 
 object PokerStatsCalc {
@@ -52,6 +60,18 @@ object PokerStatsCalc {
         val avgBetSizePot = if (betEvents.isEmpty()) 0.0 else
             betEvents.map { it.amount.toDouble() / it.potBefore.coerceAtLeast(1) }.average()
 
+        // Hand-outcome stats: only count events that resolved a hand.
+        val concluded = events.filter { it.heroWonHand != null }
+        val wins = concluded.count { it.heroWonHand == true }
+        val winRate = pct(wins, concluded.size)
+        val fold = pct(concluded.count { it.handResolution == "FOLD" }, concluded.size)
+        val villainFold = pct(concluded.count { it.handResolution == "VILLAIN_FOLD" }, concluded.size)
+        val showdown = pct(concluded.count { it.handResolution == "SHOWDOWN" }, concluded.size)
+
+        val equityEvents = events.mapNotNull { it.equityPct }
+        val avgEquity = if (equityEvents.isEmpty()) 0.0 else
+            (equityEvents.average() * 10).toInt() / 10.0
+
         val buckets = rollingBuckets(events, size = 20)
 
         return PokerStats(
@@ -64,6 +84,11 @@ object PokerStatsCalc {
             postflopFoldRate = postflopFold,
             rfiDeviationRate = rfiDevRate,
             avgBetSizePot = avgBetSizePot,
+            winRate = winRate,
+            foldRate = fold,
+            villainFoldRate = villainFold,
+            showdownRate = showdown,
+            avgEquityPct = avgEquity,
             recentWindow = buckets,
         )
     }
@@ -78,6 +103,11 @@ object PokerStatsCalc {
         postflopFoldRate = 0.0,
         rfiDeviationRate = 0.0,
         avgBetSizePot = 0.0,
+        winRate = 0.0,
+        foldRate = 0.0,
+        villainFoldRate = 0.0,
+        showdownRate = 0.0,
+        avgEquityPct = 0.0,
         recentWindow = emptyList(),
     )
 
@@ -102,7 +132,9 @@ object PokerStatsCalc {
                     windowPreflop.size,
                 )
                 val pfr = pct(windowPreflop.count { it.action in AGGR }, windowPreflop.size)
-                result += PokerStats.WindowBucket(endIndex = i, vpip = vpip, pfr = pfr)
+                val windowConcluded = window.filter { it.heroWonHand != null }
+                val winRate = pct(windowConcluded.count { it.heroWonHand == true }, windowConcluded.size)
+                result += PokerStats.WindowBucket(endIndex = i, vpip = vpip, pfr = pfr, winRate = winRate)
             }
             i += size
         }

@@ -154,6 +154,8 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
     // Algorithmic analysis — only revealed after submit.
     var equityPct by remember { mutableStateOf<Double?>(null) }
     var outs by remember { mutableStateOf<OutsReport?>(null) }
+    // Showdown outcome — only set when hand resolved via reveal (not fold).
+    var showdown by remember { mutableStateOf<xyz.nextalone.cardtrainer.engine.holdem.ShowdownResult?>(null) }
     // Multi-turn AI conversation state. Each is a list of ChatTurn: index 0
     // is always the structured initial user prompt (hidden from the UI); index
     // 1 is the first assistant reply; further indices alternate user follow-ups
@@ -301,6 +303,7 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         evaluationError = null
         equityPct = null
         outs = null
+        showdown = null
     }
 
     suspend fun runEvaluation() {
@@ -375,6 +378,7 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
         val (act, amt) = userChoice ?: return
         val potBeforeHero = table.pot
         val toCallBeforeHero = table.toCall
+        val onRiver = table.street == Street.RIVER
         // Reflect the hero's action in the table state: pot, to-call, history
         // all update. Otherwise '发下一街' would deal a turn card with the pot
         // still at its pre-decision value.
@@ -397,6 +401,29 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 street = if (resp.folded) Street.SHOWDOWN else table.street,
             )
         }
+        // On the river, if nobody folded and there's no pending bet, the
+        // hand is now settled — reveal villain's cards and compare.
+        val reachShowdown = onRiver && act != Action.FOLD &&
+            villainResp?.folded != true && table.toCall == 0 && showdown == null
+        if (reachShowdown) {
+            val (newTable, result) = trainer.concludeToShowdown(table)
+            table = newTable
+            showdown = result
+        }
+
+        val resolution: String? = when {
+            act == Action.FOLD -> "FOLD"
+            villainResp?.folded == true -> "VILLAIN_FOLD"
+            showdown != null -> "SHOWDOWN"
+            else -> null
+        }
+        val heroWon: Boolean? = when {
+            act == Action.FOLD -> false
+            villainResp?.folded == true -> true
+            showdown != null -> showdown!!.heroWon && !showdown!!.isTie
+            else -> null
+        }
+
         // Record the decision for long-term behavioural stats.
         stats.recordPoker(
             PokerDecisionEvent(
@@ -419,6 +446,8 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 villainResponse = villainResp?.let { if (it.folded) "FOLD" else "CALL" },
                 potAfter = table.pot,
                 handOver = table.street == Street.SHOWDOWN,
+                heroWonHand = heroWon,
+                handResolution = resolution,
             ),
         )
         phase = Phase.SUBMITTED
@@ -516,6 +545,7 @@ fun PokerScreen(settings: AppSettings, onBack: () -> Unit) {
                     equityPct = equityPct,
                     outs = outs,
                     preflopBaseline = if (table.street == Street.PREFLOP) preflopBaseline.toString() else null,
+                    showdown = showdown,
                     situationTurns = situationTurns,
                     situationError = situationError,
                     loadingSituation = loadingSituation,
@@ -717,6 +747,7 @@ private fun SubmittedBlock(
     equityPct: Double?,
     outs: OutsReport?,
     preflopBaseline: String?,
+    showdown: xyz.nextalone.cardtrainer.engine.holdem.ShowdownResult?,
     situationTurns: List<ChatTurn>,
     situationError: String?,
     loadingSituation: Boolean,
@@ -751,6 +782,42 @@ private fun SubmittedBlock(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             else -> { /* villain didn't need to respond (hero checked/called/folded) */ }
+        }
+    }
+
+    // Showdown reveal — appears on river after both players settled without
+    // folding.
+    showdown?.let { sd ->
+        val winnerText = when {
+            sd.isTie -> "平分底池 ${table.pot} chips"
+            sd.heroWon -> "你赢得底池 ${table.pot} chips"
+            else -> "对手赢得底池 ${table.pot} chips"
+        }
+        val winnerColor = when {
+            sd.isTie -> MaterialTheme.colorScheme.tertiary
+            sd.heroWon -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.error
+        }
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("摊牌", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "你 ${table.hero.joinToString(" ") { it.label }}（${sd.heroCategory.displayName}）",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "对手 ${sd.villainCards.joinToString(" ") { it.label }}（${sd.villainCategory.displayName}）",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    winnerText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = winnerColor,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
     }
 

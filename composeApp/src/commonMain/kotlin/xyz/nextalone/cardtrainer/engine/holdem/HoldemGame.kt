@@ -25,6 +25,16 @@ data class ActionRecord(
 )
 
 @Serializable
+data class ShowdownResult(
+    /** Villain's two hole cards, revealed. */
+    val villainCards: List<Card>,
+    val heroCategory: HandCategory,
+    val villainCategory: HandCategory,
+    val heroWon: Boolean,
+    val isTie: Boolean,
+)
+
+@Serializable
 data class HoldemTable(
     val heroPosition: Position,
     val opponents: Int,
@@ -160,6 +170,31 @@ class HoldemTrainer(private val baseSeed: Long? = null) {
                 )
             }
         }
+    }
+
+    /**
+     * Reveal villain's two hole cards and compare best 5-card hands. Called
+     * when the hero's final action on the river doesn't fold or force a
+     * villain fold — both players are now settled and have to show down.
+     * The board must be complete (5 cards dealt).
+     */
+    fun concludeToShowdown(table: HoldemTable): Pair<HoldemTable, ShowdownResult> {
+        require(table.board.size == 5) {
+            "concludeToShowdown expects a full board, got ${table.board.size} cards"
+        }
+        val villainCards = deck.dealN(2)
+        val heroStr = HandEvaluator.evaluate(table.hero + table.board)
+        val villainStr = HandEvaluator.evaluate(villainCards + table.board)
+        val cmp = heroStr.compareTo(villainStr)
+        val result = ShowdownResult(
+            villainCards = villainCards,
+            heroCategory = heroStr.category,
+            villainCategory = villainStr.category,
+            heroWon = cmp > 0,
+            isTie = cmp == 0,
+        )
+        val newTable = table.copy(street = Street.SHOWDOWN)
+        return newTable to result
     }
 
     private fun randomPosition(): Position = Position.entries.random()

@@ -24,6 +24,10 @@ data class PokerDecisionEvent(
     val villainResponse: String? = null, // "FOLD" / "CALL" / null
     val potAfter: Int,
     val handOver: Boolean,
+    // null while hand still in progress; true/false once settled (fold, villain
+    // fold, or showdown). Used by PokerStatsCalc to compute win rate.
+    val heroWonHand: Boolean? = null,
+    val handResolution: String? = null, // "FOLD" / "VILLAIN_FOLD" / "SHOWDOWN"
 )
 
 /**

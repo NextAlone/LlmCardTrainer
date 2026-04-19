@@ -1,5 +1,8 @@
 package xyz.nextalone.cardtrainer.engine.holdem
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class HandCategory(val displayName: String) {
     HIGH_CARD("高牌"),
     ONE_PAIR("一对"),
