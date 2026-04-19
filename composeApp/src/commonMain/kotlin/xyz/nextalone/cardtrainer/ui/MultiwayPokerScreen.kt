@@ -470,7 +470,13 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                         table = table,
                         equityPct = equityPct,
                         outs = outs,
-                        revealed = revealedFor == table.street || outcome != null,
+                        // Equity / made-hand / outs unlock only once the
+                        // street is fully resolved (all villains done) or
+                        // the hand is over. Unlocking on hero's own submit
+                        // let the user peek before opponents responded,
+                        // which masked how the action line actually shaped
+                        // their equity.
+                        revealed = table.isStreetClosed || outcome != null,
                     )
                     if (outcome != null) {
                         OutcomeBlock(outcome!!, table)
