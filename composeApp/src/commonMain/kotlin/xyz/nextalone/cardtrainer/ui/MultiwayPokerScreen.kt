@@ -1590,28 +1590,17 @@ private fun MultiwayScoreBadge(
                 color = tint,
             ),
         )
-        if (avg != null) {
+        if (avg != null && scores.size > 1) {
             Text(
-                "/5",
-                modifier = Modifier.padding(start = 2.dp),
+                "×${scores.size}",
+                modifier = Modifier.padding(start = 4.dp),
                 style = TextStyle(
                     fontFamily = BrandMonoFamily,
                     fontSize = 10.sp,
-                    color = c.fgSubtle,
+                    fontWeight = FontWeight.SemiBold,
+                    color = c.fgMuted,
                 ),
             )
-            if (scores.size > 1) {
-                Text(
-                    "×${scores.size}",
-                    modifier = Modifier.padding(start = 4.dp),
-                    style = TextStyle(
-                        fontFamily = BrandMonoFamily,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = c.fgMuted,
-                    ),
-                )
-            }
         }
     }
 }
