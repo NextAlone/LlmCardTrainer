@@ -472,11 +472,6 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 tone = ChipTone.Outline,
             )
             if (loadingSituation) BrandChip("AI 预载", tone = ChipTone.Accent)
-            FilledTonalButton(onClick = ::startNewHand) {
-                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.size(6.dp))
-                Text("新牌局")
-            }
         }
         val eyebrow = "HOLD'EM MULTIWAY · ${table.hero.position.label} · ${streetLabel(table.street)}"
         val title = "多人训练（实验引擎）"
