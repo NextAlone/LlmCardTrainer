@@ -25,6 +25,7 @@ class AnthropicProvider(
     private val apiKey: String,
     baseUrl: String,
     private val model: String,
+    override val defaultMaxTokens: Int = 16_384,
 ) : LlmProvider {
 
     private val endpoint = baseUrl.trimEnd('/') + "/v1/messages"

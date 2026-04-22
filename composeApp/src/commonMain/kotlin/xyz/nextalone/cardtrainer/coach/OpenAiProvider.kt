@@ -31,6 +31,7 @@ class OpenAiProvider(
     private val apiKey: String,
     baseUrl: String,
     private val model: String,
+    override val defaultMaxTokens: Int = 8_192,
 ) : LlmProvider {
 
     private val endpoint = baseUrl.trimEnd('/') + "/chat/completions"

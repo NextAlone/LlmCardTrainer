@@ -54,6 +54,9 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
     var apiKey by remember(editingKind) { mutableStateOf(settings.apiKey(editingKind)) }
     var baseUrl by remember(editingKind) { mutableStateOf(settings.baseUrl(editingKind)) }
     var model by remember(editingKind) { mutableStateOf(settings.model(editingKind)) }
+    var maxTokensText by remember(editingKind) {
+        mutableStateOf(settings.maxTokens(editingKind).toString())
+    }
     var saved by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<TestResult?>(null) }
@@ -104,6 +107,24 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            OutlinedTextField(
+                value = maxTokensText,
+                onValueChange = { new ->
+                    // Tolerate empty while editing; only digits persist.
+                    maxTokensText = new.filter { it.isDigit() }.take(6)
+                    saved = false
+                    testResult = null
+                },
+                label = { Text("单次输出上限 (max tokens)") },
+                supportingText = {
+                    Text(
+                        "推理模型（Claude extended thinking / DeepSeek-R1 等）建议 ≥ 8192；" +
+                            "默认 ${editingKind.defaultMaxTokens}",
+                    )
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -120,6 +141,12 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                             editingKind,
                             model.trim().ifEmpty { editingKind.defaultModel },
                         )
+                        val parsedMax = maxTokensText.toIntOrNull()
+                            ?: editingKind.defaultMaxTokens
+                        settings.setMaxTokens(editingKind, parsedMax)
+                        // Echo the clamped value back into the field so the
+                        // user sees what was actually stored.
+                        maxTokensText = settings.maxTokens(editingKind).toString()
                         saved = true
                     },
                     modifier = Modifier.weight(1f),
@@ -136,6 +163,8 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                                     apiKey = apiKey.trim(),
                                     baseUrl = baseUrl.trim().ifEmpty { editingKind.defaultBaseUrl },
                                     model = model.trim().ifEmpty { editingKind.defaultModel },
+                                    maxTokens = maxTokensText.toIntOrNull()
+                                        ?: editingKind.defaultMaxTokens,
                                 ),
                             )
                             testing = false

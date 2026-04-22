@@ -23,6 +23,11 @@ class AppSettings(private val settings: Settings) {
         settings.getString(keyModel(kind), kind.defaultModel)
     fun setModel(kind: ProviderKind, value: String) = settings.putString(keyModel(kind), value)
 
+    fun maxTokens(kind: ProviderKind): Int =
+        settings.getInt(keyMaxTokens(kind), kind.defaultMaxTokens).coerceIn(512, 131_072)
+    fun setMaxTokens(kind: ProviderKind, value: Int) =
+        settings.putInt(keyMaxTokens(kind), value.coerceIn(512, 131_072))
+
     /**
      * Feature flag: when true the poker screen drives the multiway engine
      * (engine.holdem.multiway) instead of the single-villain HoldemTrainer.
@@ -49,6 +54,7 @@ class AppSettings(private val settings: Settings) {
             apiKey = apiKey(k),
             baseUrl = baseUrl(k),
             model = model(k),
+            maxTokens = maxTokens(k),
         )
     }
 
@@ -64,6 +70,7 @@ class AppSettings(private val settings: Settings) {
     private fun keyApi(k: ProviderKind) = "${k.name}.api_key"
     private fun keyBase(k: ProviderKind) = "${k.name}.base_url"
     private fun keyModel(k: ProviderKind) = "${k.name}.model"
+    private fun keyMaxTokens(k: ProviderKind) = "${k.name}.max_tokens"
 
     companion object {
         private const val KEY_PROVIDER = "active_provider"
