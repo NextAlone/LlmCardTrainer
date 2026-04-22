@@ -560,6 +560,8 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 onSubmit = ::submitAction,
                 onNewHand = ::startNewHand,
                 onAdvanceStreet = ::advanceStreet,
+                coachBusyForCurrentStreet = table.street in evaluationLoadingFor ||
+                    table.street in recapLoadingFor,
             )
         }
 
@@ -1509,6 +1511,7 @@ private fun MultiwayBottomBar(
     onSubmit: (Action, Int) -> Unit,
     onNewHand: () -> Unit,
     onAdvanceStreet: () -> Unit,
+    coachBusyForCurrentStreet: Boolean = false,
 ) {
     val handOver = outcome != null
     val streetClosed = !handOver && table.isStreetClosed
@@ -1536,14 +1539,25 @@ private fun MultiwayBottomBar(
         when {
             heroTurn -> MultiwayActionSheet(table = table, onSubmit = onSubmit)
             streetClosed -> PinnedActionBar {
+                val isRiver = table.street == Street.RIVER
+                // RIVER showdown is destructive for the A/B/C pane content
+                // (reveal + recap may still be streaming). Block the Showdown
+                // button until the coach row is idle so users don't discard
+                // an in-flight analysis by accident. Other streets don't
+                // overwrite panes on advance, so keep the button live.
+                val waitingForCoach = isRiver && coachBusyForCurrentStreet
                 Text(
-                    "本街结束 · 查看分析后继续",
+                    if (waitingForCoach) "本街结束 · 等待 AI 分析完成…"
+                    else "本街结束 · 查看分析后继续",
                     color = BrandTheme.colors.fgMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.weight(1f))
-                Button(onClick = onAdvanceStreet) {
-                    Text(if (table.street == Street.RIVER) "摊牌" else "发下一街")
+                Button(
+                    onClick = onAdvanceStreet,
+                    enabled = !waitingForCoach,
+                ) {
+                    Text(if (isRiver) "摊牌" else "发下一街")
                 }
             }
             handOver -> PinnedActionBar {
