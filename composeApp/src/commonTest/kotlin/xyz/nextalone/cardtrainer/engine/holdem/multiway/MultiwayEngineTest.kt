@@ -52,6 +52,29 @@ class MultiwayEngineTest {
     }
 
     @Test
+    fun bb_gets_option_after_sb_limps_heads_up() {
+        // Regression guard: heads-up, hero = SB, hero limps to 2bb. The engine
+        // must hand action to BB (the option) rather than closing the street.
+        val seed = 42L
+        val deck = Deck(seed = seed)
+        var table = MultiwayEngine.newHand(
+            heroPosition = Position.SB,
+            opponents = 1,
+            deck = deck,
+            rng = Random(seed),
+        )
+        assertTrue(table.isHeroTurn, "heads-up preflop: SB acts first")
+        table = MultiwayEngine.applyHeroAction(
+            table,
+            xyz.nextalone.cardtrainer.engine.holdem.Action.CALL,
+            1,
+        )
+        val bbIdx = table.seats.indexOfFirst { it.position == Position.BB }
+        assertEquals(bbIdx, table.toActIndex, "BB must receive the option after SB limp")
+        assertTrue(!table.isStreetClosed, "BB option must not close the street")
+    }
+
+    @Test
     fun fullHand_preflop_to_showdown_does_not_throw() {
         val seed = 7L
         val deck = Deck(seed = seed)
