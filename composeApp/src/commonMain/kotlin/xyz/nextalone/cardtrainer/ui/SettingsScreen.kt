@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import xyz.nextalone.cardtrainer.coach.ProviderConfig
 import xyz.nextalone.cardtrainer.coach.ProviderKind
+import xyz.nextalone.cardtrainer.coach.ReasoningMode
 import xyz.nextalone.cardtrainer.coach.TestResult
 import xyz.nextalone.cardtrainer.coach.testConnection
 import xyz.nextalone.cardtrainer.storage.AppSettings
@@ -56,6 +57,9 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
     var model by remember(editingKind) { mutableStateOf(settings.model(editingKind)) }
     var maxTokensText by remember(editingKind) {
         mutableStateOf(settings.maxTokens(editingKind).toString())
+    }
+    var reasoningMode by remember(editingKind) {
+        mutableStateOf(settings.reasoningMode(editingKind))
     }
     var saved by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
@@ -107,6 +111,26 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            Text("推理模式", style = MaterialTheme.typography.labelMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReasoningMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = reasoningMode == mode,
+                        onClick = {
+                            reasoningMode = mode
+                            saved = false
+                            testResult = null
+                        },
+                        label = { Text(mode.label) },
+                    )
+                }
+            }
+            Text(
+                "自动 = 按模型 id 猜；推理模型 = 强制走 extended thinking / " +
+                    "max_completion_tokens + reasoning_effort；标准对话 = 关闭。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
             OutlinedTextField(
                 value = maxTokensText,
                 onValueChange = { new ->
@@ -144,6 +168,7 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                         val parsedMax = maxTokensText.toIntOrNull()
                             ?: editingKind.defaultMaxTokens
                         settings.setMaxTokens(editingKind, parsedMax)
+                        settings.setReasoningMode(editingKind, reasoningMode)
                         // Echo the clamped value back into the field so the
                         // user sees what was actually stored.
                         maxTokensText = settings.maxTokens(editingKind).toString()
@@ -165,6 +190,7 @@ fun SettingsScreen(settings: AppSettings, onBack: () -> Unit) {
                                     model = model.trim().ifEmpty { editingKind.defaultModel },
                                     maxTokens = maxTokensText.toIntOrNull()
                                         ?: editingKind.defaultMaxTokens,
+                                    reasoningMode = reasoningMode,
                                 ),
                             )
                             testing = false

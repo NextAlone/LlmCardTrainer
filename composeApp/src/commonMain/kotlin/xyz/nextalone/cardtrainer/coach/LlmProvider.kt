@@ -1,5 +1,18 @@
 package xyz.nextalone.cardtrainer.coach
 
+/**
+ * User-chosen reasoning shape. AUTO falls back to a name-based guess so
+ * that out-of-the-box experience works for canonical model ids, but the
+ * user can force CHAT (plain Chat Completions / Messages API) or
+ * REASONING (OpenAI max_completion_tokens + reasoning_effort, or Claude
+ * extended thinking block) if the guess is wrong for a proxy / rename.
+ */
+enum class ReasoningMode(val label: String) {
+    AUTO("自动检测"),
+    CHAT("标准对话"),
+    REASONING("推理模型"),
+}
+
 enum class ProviderKind(
     val label: String,
     val defaultBaseUrl: String,
@@ -30,7 +43,16 @@ data class ProviderConfig(
     val baseUrl: String,
     val model: String,
     val maxTokens: Int = kind.defaultMaxTokens,
+    val reasoningMode: ReasoningMode = ReasoningMode.AUTO,
 )
+
+/**
+ * A single coach response, including any reasoning / thinking trace the
+ * provider chose to surface. UI folds [reasoning] into a collapsed
+ * disclosure so users can audit chain-of-thought without it crowding
+ * the main answer. `null` means the provider didn't expose any.
+ */
+data class CoachReply(val content: String, val reasoning: String? = null)
 
 interface LlmProvider {
     /**
@@ -55,7 +77,20 @@ interface LlmProvider {
         systemPrompt: String,
         messages: List<ChatTurn>,
         maxTokens: Int = defaultMaxTokens,
-    ): String
+    ): String = coachVerbose(systemPrompt, messages, maxTokens).content
+
+    /**
+     * Verbose variant that also returns the provider's internal reasoning /
+     * thinking trace when one was produced. Default impl delegates to
+     * [coach] and leaves reasoning null — Provider impls that can surface
+     * a thinking block should override this directly and let [coach] fall
+     * through to the default bridge.
+     */
+    suspend fun coachVerbose(
+        systemPrompt: String,
+        messages: List<ChatTurn>,
+        maxTokens: Int = defaultMaxTokens,
+    ): CoachReply
 
     /** Convenience: one-shot single-user-turn call. */
     suspend fun coach(
@@ -73,7 +108,19 @@ interface LlmProvider {
 
 object LlmProviders {
     fun create(cfg: ProviderConfig): LlmProvider = when (cfg.kind) {
-        ProviderKind.ANTHROPIC -> AnthropicProvider(cfg.apiKey, cfg.baseUrl, cfg.model, cfg.maxTokens)
-        ProviderKind.OPENAI_COMPAT -> OpenAiProvider(cfg.apiKey, cfg.baseUrl, cfg.model, cfg.maxTokens)
+        ProviderKind.ANTHROPIC -> AnthropicProvider(
+            apiKey = cfg.apiKey,
+            baseUrl = cfg.baseUrl,
+            model = cfg.model,
+            defaultMaxTokens = cfg.maxTokens,
+            reasoningMode = cfg.reasoningMode,
+        )
+        ProviderKind.OPENAI_COMPAT -> OpenAiProvider(
+            apiKey = cfg.apiKey,
+            baseUrl = cfg.baseUrl,
+            model = cfg.model,
+            defaultMaxTokens = cfg.maxTokens,
+            reasoningMode = cfg.reasoningMode,
+        )
     }
 }

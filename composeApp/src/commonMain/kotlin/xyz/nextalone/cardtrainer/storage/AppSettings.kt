@@ -2,6 +2,7 @@ package xyz.nextalone.cardtrainer.storage
 
 import xyz.nextalone.cardtrainer.coach.ProviderConfig
 import xyz.nextalone.cardtrainer.coach.ProviderKind
+import xyz.nextalone.cardtrainer.coach.ReasoningMode
 import com.russhwolf.settings.Settings
 
 class AppSettings(private val settings: Settings) {
@@ -27,6 +28,14 @@ class AppSettings(private val settings: Settings) {
         settings.getInt(keyMaxTokens(kind), kind.defaultMaxTokens).coerceIn(512, 131_072)
     fun setMaxTokens(kind: ProviderKind, value: Int) =
         settings.putInt(keyMaxTokens(kind), value.coerceIn(512, 131_072))
+
+    fun reasoningMode(kind: ProviderKind): ReasoningMode = runCatching {
+        ReasoningMode.valueOf(
+            settings.getString(keyReasoning(kind), ReasoningMode.AUTO.name),
+        )
+    }.getOrDefault(ReasoningMode.AUTO)
+    fun setReasoningMode(kind: ProviderKind, value: ReasoningMode) =
+        settings.putString(keyReasoning(kind), value.name)
 
     /**
      * Feature flag: when true the poker screen drives the multiway engine
@@ -55,6 +64,7 @@ class AppSettings(private val settings: Settings) {
             baseUrl = baseUrl(k),
             model = model(k),
             maxTokens = maxTokens(k),
+            reasoningMode = reasoningMode(k),
         )
     }
 
@@ -71,6 +81,7 @@ class AppSettings(private val settings: Settings) {
     private fun keyBase(k: ProviderKind) = "${k.name}.base_url"
     private fun keyModel(k: ProviderKind) = "${k.name}.model"
     private fun keyMaxTokens(k: ProviderKind) = "${k.name}.max_tokens"
+    private fun keyReasoning(k: ProviderKind) = "${k.name}.reasoning_mode"
 
     companion object {
         private const val KEY_PROVIDER = "active_provider"

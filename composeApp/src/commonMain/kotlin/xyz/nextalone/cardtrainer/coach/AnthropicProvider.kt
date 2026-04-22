@@ -26,6 +26,7 @@ class AnthropicProvider(
     baseUrl: String,
     private val model: String,
     override val defaultMaxTokens: Int = 16_384,
+    private val reasoningMode: ReasoningMode = ReasoningMode.AUTO,
 ) : LlmProvider {
 
     private val endpoint = baseUrl.trimEnd('/') + "/v1/messages"
@@ -45,11 +46,20 @@ class AnthropicProvider(
         expectSuccess = true
     }
 
-    override suspend fun coach(
+    override suspend fun coachVerbose(
         systemPrompt: String,
         messages: List<ChatTurn>,
         maxTokens: Int,
-    ): String {
+    ): CoachReply {
+        val thinkingEnabled = useExtendedThinking()
+        val thinking = if (thinkingEnabled) {
+            // budget_tokens must be < max_tokens and ≥ 1024. Reserve 1/3 of
+            // the budget for thinking up to 10k, leaving room for the
+            // actual answer block even on a tight overall budget.
+            val budget = (maxTokens / 3).coerceIn(1024, 10_000)
+                .coerceAtMost(maxTokens - 256)
+            if (budget >= 1024) Thinking(budgetTokens = budget) else null
+        } else null
         val request = MessageRequest(
             model = model,
             maxTokens = maxTokens,
@@ -65,6 +75,10 @@ class AnthropicProvider(
                     content = it.content,
                 )
             },
+            thinking = thinking,
+            // Extended thinking requires temperature == 1. Leave it null on
+            // the non-thinking path so Anthropic uses its service default.
+            temperature = if (thinking != null) 1.0 else null,
         )
         val resp: MessageResponse = client.post(endpoint) {
             header("x-api-key", apiKey)
@@ -72,8 +86,33 @@ class AnthropicProvider(
             contentType(ContentType.Application.Json)
             setBody(request)
         }.body()
-        val raw = resp.content.joinToString("\n") { it.text.orEmpty() }
-        return ResponseCleanup.cleanOrRaw(raw)
+        val answer = resp.content
+            .filter { it.type == "text" }
+            .joinToString("\n") { it.text.orEmpty() }
+        val reasoning = resp.content
+            .filter { it.type == "thinking" }
+            .mapNotNull { it.thinking?.takeUnless { s -> s.isBlank() } }
+            .joinToString("\n\n")
+            .ifBlank { null }
+        return CoachReply(
+            content = ResponseCleanup.cleanOrRaw(answer),
+            reasoning = reasoning,
+        )
+    }
+
+    private fun useExtendedThinking(): Boolean = when (reasoningMode) {
+        ReasoningMode.CHAT -> false
+        ReasoningMode.REASONING -> true
+        ReasoningMode.AUTO -> {
+            // Claude extended thinking is supported on 3.7 Sonnet, Claude 4
+            // Opus / Sonnet / Haiku families. Safe default when the model id
+            // matches one of these prefixes.
+            val lower = model.lowercase()
+            lower.startsWith("claude-opus-4") ||
+                lower.startsWith("claude-sonnet-4") ||
+                lower.startsWith("claude-haiku-4") ||
+                lower.startsWith("claude-3-7")
+        }
     }
 
     override fun close() = client.close()
@@ -87,6 +126,14 @@ private data class MessageRequest(
     @SerialName("max_tokens") val maxTokens: Int,
     val system: List<SystemBlock>,
     val messages: List<Message>,
+    val thinking: Thinking? = null,
+    val temperature: Double? = null,
+)
+
+@Serializable
+private data class Thinking(
+    val type: String = "enabled",
+    @SerialName("budget_tokens") val budgetTokens: Int,
 )
 
 @Serializable
@@ -113,7 +160,11 @@ private data class MessageResponse(
 )
 
 @Serializable
-private data class ContentBlock(val type: String, val text: String? = null)
+private data class ContentBlock(
+    val type: String,
+    val text: String? = null,
+    val thinking: String? = null,
+)
 
 @Serializable
 private data class Usage(

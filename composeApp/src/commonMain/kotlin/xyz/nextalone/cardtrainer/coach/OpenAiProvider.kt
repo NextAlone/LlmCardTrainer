@@ -32,6 +32,7 @@ class OpenAiProvider(
     baseUrl: String,
     private val model: String,
     override val defaultMaxTokens: Int = 8_192,
+    private val reasoningMode: ReasoningMode = ReasoningMode.AUTO,
 ) : LlmProvider {
 
     private val endpoint = baseUrl.trimEnd('/') + "/chat/completions"
@@ -51,11 +52,11 @@ class OpenAiProvider(
         expectSuccess = true
     }
 
-    override suspend fun coach(
+    override suspend fun coachVerbose(
         systemPrompt: String,
         messages: List<ChatTurn>,
         maxTokens: Int,
-    ): String {
+    ): CoachReply {
         val shape = modelShape(model)
         val requestMessages = buildList {
             add(RequestMessage(role = "system", content = systemPrompt))
@@ -94,22 +95,37 @@ class OpenAiProvider(
             setBody(body)
         }.body()
         val msg = resp.choices.firstOrNull()?.message
-        val raw = msg?.content?.takeUnless { it.isBlank() }
-            ?: msg?.reasoningContent?.takeUnless { it.isBlank() }
+        val content = msg?.content?.takeUnless { it.isBlank() }
+        val reasoning = msg?.reasoningContent?.takeUnless { it.isBlank() }
             ?: msg?.thinking?.takeUnless { it.isBlank() }
+        val finalContent = content
+            ?: reasoning
+            // If the endpoint returned only reasoning and no separate final
+            // text, fall back to it so the card isn't blank — that's the
+            // shape DeepSeek-R1 proxies use when they don't emit a split.
             ?: ""
-        return ResponseCleanup.cleanOrRaw(raw)
+        return CoachReply(
+            content = ResponseCleanup.cleanOrRaw(finalContent),
+            // Only report reasoning as a separate trace when the final
+            // content is a distinct, non-empty answer — otherwise we'd
+            // duplicate the same text into both fields.
+            reasoning = if (content != null) reasoning else null,
+        )
     }
 
     private enum class ModelShape { OPENAI_REASONING, CHAT }
 
-    private fun modelShape(id: String): ModelShape {
-        val lower = id.lowercase()
-        val openAiReasoningPrefixes = listOf("o1", "o3", "o4", "gpt-5")
-        return if (openAiReasoningPrefixes.any { lower.startsWith(it) }) {
-            ModelShape.OPENAI_REASONING
-        } else {
-            ModelShape.CHAT
+    private fun modelShape(id: String): ModelShape = when (reasoningMode) {
+        ReasoningMode.CHAT -> ModelShape.CHAT
+        ReasoningMode.REASONING -> ModelShape.OPENAI_REASONING
+        ReasoningMode.AUTO -> {
+            val lower = id.lowercase()
+            val openAiReasoningPrefixes = listOf("o1", "o3", "o4", "gpt-5")
+            if (openAiReasoningPrefixes.any { lower.startsWith(it) }) {
+                ModelShape.OPENAI_REASONING
+            } else {
+                ModelShape.CHAT
+            }
         }
     }
 
