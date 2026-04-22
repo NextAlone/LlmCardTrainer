@@ -222,14 +222,35 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             ),
         )
         val coach = LlmProviders.create(cfg)
+        val contentBuf = StringBuilder()
+        val reasoningBuf = StringBuilder()
+        // Seed a placeholder ASSISTANT turn so CoachPane can latch onto it
+        // and update text as deltas arrive. situationRevealed still gates
+        // display by default — users with 'reveal immediately' see deltas
+        // as they stream.
+        situationByStreet = situationByStreet +
+            (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, "")))
         try {
-            val verbose = withRetry {
-                coach.coachVerbose(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
-            }
-            val reply = verbose.content
-            val reasoning = verbose.reasoning
-            situationByStreet = situationByStreet +
-                (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply, reasoning)))
+            coach.streamCoach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+                .collect { delta ->
+                    when (delta) {
+                        is xyz.nextalone.cardtrainer.coach.CoachDelta.Content ->
+                            contentBuf.append(delta.text)
+                        is xyz.nextalone.cardtrainer.coach.CoachDelta.Reasoning ->
+                            reasoningBuf.append(delta.text)
+                        xyz.nextalone.cardtrainer.coach.CoachDelta.Done -> {}
+                    }
+                    situationByStreet = situationByStreet +
+                        (
+                            street to (
+                                seed + ChatTurn(
+                                    ChatTurn.Role.ASSISTANT,
+                                    contentBuf.toString(),
+                                    reasoningBuf.toString().ifEmpty { null },
+                                )
+                                )
+                            )
+                }
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -262,15 +283,35 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             ),
         )
         val coach = LlmProviders.create(cfg)
+        val contentBuf = StringBuilder()
+        val reasoningBuf = StringBuilder()
+        evaluationByStreet = evaluationByStreet +
+            (forStreet to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, "")))
         try {
-            val verbose = withRetry {
-                coach.coachVerbose(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
-            }
-            val reply = verbose.content
-            val reasoning = verbose.reasoning
-            evaluationByStreet = evaluationByStreet +
-                (forStreet to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply, reasoning)))
-            val parsed = parseMultiScores(reply, submissions.size)
+            coach.streamCoach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+                .collect { delta ->
+                    when (delta) {
+                        is xyz.nextalone.cardtrainer.coach.CoachDelta.Content ->
+                            contentBuf.append(delta.text)
+                        is xyz.nextalone.cardtrainer.coach.CoachDelta.Reasoning ->
+                            reasoningBuf.append(delta.text)
+                        xyz.nextalone.cardtrainer.coach.CoachDelta.Done -> {}
+                    }
+                    evaluationByStreet = evaluationByStreet +
+                        (
+                            forStreet to (
+                                seed + ChatTurn(
+                                    ChatTurn.Role.ASSISTANT,
+                                    contentBuf.toString(),
+                                    reasoningBuf.toString().ifEmpty { null },
+                                )
+                                )
+                            )
+                }
+            // Parse scores only once the stream is complete — the score
+            // regex walks the whole reply and partial tokens would score
+            // wrong or miss entries.
+            val parsed = parseMultiScores(contentBuf.toString(), submissions.size)
             if (parsed.isNotEmpty()) {
                 scoreByStreet = scoreByStreet + (forStreet to parsed)
             }
@@ -370,14 +411,31 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             ),
         )
         val coach = LlmProviders.create(cfg)
+        val contentBuf = StringBuilder()
+        val reasoningBuf = StringBuilder()
+        recapByStreet = recapByStreet +
+            (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, "")))
         try {
-            val verbose = withRetry {
-                coach.coachVerbose(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
-            }
-            val reply = verbose.content
-            val reasoning = verbose.reasoning
-            recapByStreet = recapByStreet +
-                (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply, reasoning)))
+            coach.streamCoach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+                .collect { delta ->
+                    when (delta) {
+                        is xyz.nextalone.cardtrainer.coach.CoachDelta.Content ->
+                            contentBuf.append(delta.text)
+                        is xyz.nextalone.cardtrainer.coach.CoachDelta.Reasoning ->
+                            reasoningBuf.append(delta.text)
+                        xyz.nextalone.cardtrainer.coach.CoachDelta.Done -> {}
+                    }
+                    recapByStreet = recapByStreet +
+                        (
+                            street to (
+                                seed + ChatTurn(
+                                    ChatTurn.Role.ASSISTANT,
+                                    contentBuf.toString(),
+                                    reasoningBuf.toString().ifEmpty { null },
+                                )
+                                )
+                            )
+                }
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -1474,6 +1532,10 @@ private fun CoachPane(
     val raw = lastAssistant?.content
     val assistant = if (raw != null && stripScore) stripLeadingScore(raw) else raw
     val reasoning = lastAssistant?.reasoning?.takeUnless { it.isBlank() }
+    // Streaming state has loading=true AND non-empty assistant; don't let
+    // the '分析中…' placeholder hide partial deltas.
+    val hasContent = !assistant.isNullOrEmpty()
+    val hasReasoning = reasoning != null
     when {
         error != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
@@ -1493,16 +1555,34 @@ private fun CoachPane(
                 }
             }
         }
-        loading -> Row(
+        loading && !hasContent && !hasReasoning -> Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             Text("分析中…", style = MaterialTheme.typography.bodySmall, color = BrandTheme.colors.fgMuted)
         }
-        assistant != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        hasContent || hasReasoning -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (reasoning != null) ReasoningDisclosure(reasoning)
-            AiMarkdown(assistant)
+            if (assistant != null) AiMarkdown(assistant)
+            if (loading) {
+                // Inline 'still streaming' hint so the pane isn't mistaken
+                // for a finished response when deltas are still coming.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                    )
+                    Text(
+                        "继续生成中…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BrandTheme.colors.fgMuted,
+                    )
+                }
+            }
         }
         else -> Text(
             emptyHint,
