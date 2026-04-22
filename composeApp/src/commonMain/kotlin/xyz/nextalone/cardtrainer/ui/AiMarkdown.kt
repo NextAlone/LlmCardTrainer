@@ -14,6 +14,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
@@ -74,7 +80,10 @@ private fun TableBlock(headers: List<String>, rows: List<List<String>>) {
         ) {
             headers.forEach { h ->
                 Text(
-                    h,
+                    // Headers are already bold via fontWeight below; still
+                    // parse inline markdown so `code` and italics render,
+                    // and in case the model emits redundant **…** markers.
+                    text = renderInlineMarkdown(h),
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
@@ -95,7 +104,7 @@ private fun TableBlock(headers: List<String>, rows: List<List<String>>) {
             ) {
                 padded.take(cellCount).forEach { cell ->
                     Text(
-                        cell,
+                        text = renderInlineMarkdown(cell),
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 6.dp),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -163,4 +172,94 @@ private fun isSeparatorRow(line: String): Boolean {
 
 private fun parseCells(line: String): List<String> {
     return line.trim().trim('|').split('|').map { it.trim() }
+}
+
+/**
+ * Tiny inline-markdown renderer for table cells. Recognizes
+ *  - `**bold**` / `__bold__` → bold
+ *  - `*italic*` / `_italic_` → italic (only when the marker isn't
+ *    adjacent to a word-char — avoids eating `foo_bar_baz` identifiers)
+ *  - `` `code` `` → monospace
+ *
+ * Unmatched markers render as literal characters so malformed input
+ * never swallows surrounding text. Nested markers aren't supported —
+ * table cells rarely need them and full GFM inline parsing would be a
+ * separate dependency.
+ */
+private fun renderInlineMarkdown(src: String): AnnotatedString = buildAnnotatedString {
+    var i = 0
+    val n = src.length
+    while (i < n) {
+        val c = src[i]
+        when {
+            c == '`' -> {
+                val end = src.indexOf('`', startIndex = i + 1)
+                if (end < 0) {
+                    append(c)
+                    i++
+                } else {
+                    withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) {
+                        append(src.substring(i + 1, end))
+                    }
+                    i = end + 1
+                }
+            }
+            (c == '*' || c == '_') && i + 1 < n && src[i + 1] == c -> {
+                // Bold: ** or __
+                val marker = "$c$c"
+                val end = src.indexOf(marker, startIndex = i + 2)
+                if (end < 0) {
+                    append(c)
+                    i++
+                } else {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(renderInlineMarkdown(src.substring(i + 2, end)))
+                    }
+                    i = end + 2
+                }
+            }
+            c == '*' || c == '_' -> {
+                // Italic: single * / _. Require the closing marker to be
+                // non-adjacent to a word char on the trailing side for _
+                // so we don't mangle snake_case tokens in cells.
+                val end = findItalicEnd(src, i, c)
+                if (end < 0) {
+                    append(c)
+                    i++
+                } else {
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        append(renderInlineMarkdown(src.substring(i + 1, end)))
+                    }
+                    i = end + 1
+                }
+            }
+            else -> {
+                append(c)
+                i++
+            }
+        }
+    }
+}
+
+private fun findItalicEnd(src: String, start: Int, marker: Char): Int {
+    var j = start + 1
+    while (j < src.length) {
+        if (src[j] == marker) {
+            // For underscore italics require word-boundary on trailing side
+            // to avoid matching inside identifiers like foo_bar_baz.
+            if (marker == '_') {
+                val prev = src.getOrNull(j - 1)
+                val next = src.getOrNull(j + 1)
+                val prevWord = prev?.isLetterOrDigit() == true
+                val nextWord = next?.isLetterOrDigit() == true
+                if (prevWord && nextWord) {
+                    j++
+                    continue
+                }
+            }
+            return j
+        }
+        j++
+    }
+    return -1
 }
