@@ -562,6 +562,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 onAdvanceStreet = ::advanceStreet,
                 coachBusyForCurrentStreet = table.street in evaluationLoadingFor ||
                     table.street in recapLoadingFor,
+                handRecapLoading = loadingHandRecap,
             )
         }
 
@@ -1512,6 +1513,7 @@ private fun MultiwayBottomBar(
     onNewHand: () -> Unit,
     onAdvanceStreet: () -> Unit,
     coachBusyForCurrentStreet: Boolean = false,
+    handRecapLoading: Boolean = false,
 ) {
     val handOver = outcome != null
     val streetClosed = !handOver && table.isStreetClosed
@@ -1561,8 +1563,23 @@ private fun MultiwayBottomBar(
                 }
             }
             handOver -> PinnedActionBar {
+                if (handRecapLoading) {
+                    Text(
+                        "整手复盘生成中…",
+                        color = BrandTheme.colors.fgMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Spacer(Modifier.weight(1f))
-                Button(onClick = onNewHand) { Text("开始下一手") }
+                Button(
+                    onClick = onNewHand,
+                    // Starting the next hand wipes handRecapTurns via the
+                    // handSeed-keyed remember. Keep the button live but let
+                    // the left-hand hint tell the user the D-tab is still
+                    // streaming so they can choose to wait.
+                ) {
+                    Text(if (handRecapLoading) "直接开始下一手" else "开始下一手")
+                }
             }
             else -> PinnedActionBar {
                 Text(
