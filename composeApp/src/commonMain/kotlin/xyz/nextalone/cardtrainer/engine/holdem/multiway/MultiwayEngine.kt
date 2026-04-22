@@ -111,6 +111,17 @@ object MultiwayEngine {
     fun isHandOver(table: MultiwayTable): Boolean =
         table.seats.count { it.isLive } <= 1 || table.street == Street.SHOWDOWN
 
+    // TODO(run-it-twice): when every remaining seat is ALL_IN before the
+    // river, poker clients often let users request a second runout so the
+    // pot splits across two boards (halves equity variance). To extend:
+    //  1. Add a `runouts: Int = 1` parameter and a board-per-runout field
+    //     on MultiwayTable (List<List<Card>>).
+    //  2. Stream each runout's board in advanceStreet until SHOWDOWN.
+    //  3. In Showdown.run, evaluate each runout independently and merge
+    //     the awards (per-pot, per-runout) — odd chip distribution stays
+    //     BTN-left ordered within each runout.
+    // Out of scope for the current pass; training sessions only do a
+    // single runout.
     fun advanceStreet(table: MultiwayTable, deck: Deck): MultiwayTable {
         val cardsToAdd = when (table.street) {
             Street.PREFLOP -> 3
