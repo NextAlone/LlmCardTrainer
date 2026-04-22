@@ -90,4 +90,67 @@ class ShowdownTest {
         assertTrue(outcome.seatRanks[1] != null)
         assertTrue(outcome.seatRanks[2] != null)
     }
+
+    @Test
+    fun odd_chip_goes_to_btn_left_winner_first() {
+        // Broadway straight sits on the board itself. Both live seats play
+        // the board and tie. Pot = 5 (UTG 2 + BTN-folded 1 + BB 2), 2 winners,
+        // perWinner = 2, remainder = 1. Odd-chip order starts at SB; SB empty
+        // here, so BB (seat 2) is the BTN-left-most winner and takes it.
+        val board = listOf(
+            c(Rank.ACE, Suit.HEARTS), c(Rank.KING, Suit.HEARTS), c(Rank.QUEEN, Suit.CLUBS),
+            c(Rank.JACK, Suit.DIAMONDS), c(Rank.TEN, Suit.CLUBS),
+        )
+        val seats = listOf(
+            seat(Position.UTG, 2, listOf(c(Rank.TWO, Suit.SPADES), c(Rank.FOUR, Suit.SPADES))),
+            seat(Position.BTN, 1, null, folded = true),
+            seat(Position.BB, 2, listOf(c(Rank.THREE, Suit.SPADES), c(Rank.FIVE, Suit.SPADES))),
+        )
+        val table = MultiwayTable(
+            seats = seats,
+            heroIndex = 0,
+            street = Street.SHOWDOWN,
+            board = board,
+            toActIndex = -1,
+            currentBet = 0,
+            lastRaiseSize = 0,
+            history = emptyList(),
+        )
+        val outcome = Showdown.run(table)
+        // Main pot = 5 (1 from BTN + 2 from each remaining). Both flushes are
+        // A-K-Q-J high via board, so they tie and split.
+        assertEquals(1, outcome.awards.size)
+        val award = outcome.awards[0]
+        assertEquals(5, award.potAmount)
+        assertEquals(setOf(0, 2), award.winnerSeats.toSet())
+        assertEquals(2, award.perWinner)
+        assertEquals(1, award.remainder)
+        assertEquals(listOf(2), award.oddChipSeats)
+    }
+
+    @Test
+    fun odd_chip_empty_when_split_is_even() {
+        val board = listOf(
+            c(Rank.ACE, Suit.HEARTS), c(Rank.KING, Suit.HEARTS), c(Rank.QUEEN, Suit.CLUBS),
+            c(Rank.JACK, Suit.DIAMONDS), c(Rank.TEN, Suit.CLUBS),
+        )
+        val seats = listOf(
+            seat(Position.UTG, 2, listOf(c(Rank.TWO, Suit.SPADES), c(Rank.FOUR, Suit.SPADES))),
+            seat(Position.BB, 2, listOf(c(Rank.THREE, Suit.SPADES), c(Rank.FIVE, Suit.SPADES))),
+        )
+        val table = MultiwayTable(
+            seats = seats,
+            heroIndex = 0,
+            street = Street.SHOWDOWN,
+            board = board,
+            toActIndex = -1,
+            currentBet = 0,
+            lastRaiseSize = 0,
+            history = emptyList(),
+        )
+        val outcome = Showdown.run(table)
+        val award = outcome.awards[0]
+        assertEquals(0, award.remainder)
+        assertTrue(award.oddChipSeats.isEmpty())
+    }
 }
