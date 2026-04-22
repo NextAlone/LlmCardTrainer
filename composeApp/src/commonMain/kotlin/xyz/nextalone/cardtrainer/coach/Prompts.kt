@@ -161,25 +161,43 @@ object Prompts {
         if (table.board.isNotEmpty()) {
             append("【公共牌】${table.board.joinToString(" ") { it.label }}\n")
         }
-        append("【本街完整行动线】\n")
+        val heroPosLabel = hero.position.label
+        append("【本街完整行动线 · 仅作背景】\n")
+        append("  说明：下列是本街桌上所有玩家的行动，仅用于你判断对手 range / 位置。\n")
+        append("  你只需要对后面【需要打分的 hero 决策】里列出的条目打分，**不要对对手行动打分**。\n")
         for (h in table.history.filter { it.street == table.street }) {
             val who = h.actor?.label ?: "?"
+            val tag = if (who == heroPosLabel) "【hero】" else ""
             val amt = if (h.amount > 0) " ${h.amount}" else ""
-            append("  - $who ${h.action.label}$amt\n")
+            append("  - $who${tag} ${h.action.label}$amt\n")
         }
-        append("【你的本街决策回放 · 共 ${actions.size} 次】\n")
+        val count = actions.size
+        val header = if (count == 1) {
+            "【需要打分的 hero 决策 · 共 1 次 —— 本街只有这一条，不要拆成多条】"
+        } else {
+            "【需要打分的 hero 决策 · 共 $count 次 —— 严格按下列顺序逐条评分】"
+        }
+        append(header).append('\n')
         actions.forEachIndexed { i, a ->
             val n = i + 1
             val historyFragment = a.priorHistoryLine.takeIf { it.isNotBlank() } ?: "（你是首个行动）"
             val amtText = if (a.amount > 0) " ${a.amount}" else ""
-            append("  $n. 底池 ${a.potBefore} · 跟注 ${a.toCall} · 对手下注档 ${a.currentBet} · 剩余栈 ${a.stack}；当时行动线：$historyFragment；你选择 ${a.action.label}$amtText\n")
+            append("  $n. 底池 ${a.potBefore} · 跟注 ${a.toCall} · 对手下注档 ${a.currentBet} · 剩余栈 ${a.stack}；当时行动线：$historyFragment；hero 选择 ${a.action.label}$amtText\n")
         }
-        append("\n请对本街每次决策分别独立打分。输出规范（严格遵守，顺序与编号对应）：\n")
-        actions.indices.forEach { i ->
-            val n = i + 1
-            append("  【评分 $n：X.X / 5】（然后用 1-2 句中文评语说明该次决策的偏差或正确之处）\n")
+        append('\n')
+        if (count == 1) {
+            append("输出规范（严格遵守，只输出下面一段）：\n")
+            append("  【评分 1：X.X / 5】（然后用 1-2 句中文评语说明这**一次**决策的偏差或正确之处）\n")
+            append("禁止：不要出现 “【评分 2】”、不要复述对手行动、不要评价对手、不要总结。")
+        } else {
+            append("请对列出的每次 hero 决策独立打分。输出规范（严格遵守，顺序与编号对应）：\n")
+            actions.indices.forEach { i ->
+                val n = i + 1
+                append("  【评分 $n：X.X / 5】（然后用 1-2 句中文评语说明该次决策的偏差或正确之处）\n")
+            }
+            append("禁止：不要出现多于 $count 条评分、不要评价对手的动作。")
         }
-        append("评分档位与单次 EVALUATION 相同：5.0 与基线一致 / 4.x 方向正确 / 3.x 可接受 / 2.x EV 中度损失 / <2 严重错误。")
+        append("评分档位：5.0 与基线一致 / 4.x 方向正确 / 3.x 可接受 / 2.x EV 中度损失 / <2 严重错误。")
         append("评语中如对比替代方案，请给出具体尺度（pot 百分比 或 bb）。")
         append("本次不需要最终的总结 / 表格；每次决策单独一段即可。")
     }
