@@ -53,6 +53,12 @@ data class HoldemTable(
     val hero: List<Card>,
     val board: List<Card>,
     val history: List<ActionRecord>,
+    // Seed that produced this hand's deck shuffle. Persisted so
+    // restoreFrom() can rebuild the exact same post-hand deck, keeping
+    // villain hole cards and future board cards consistent with what the
+    // user saw before serialization. Null on legacy snapshots — the
+    // restore path then falls back to a fresh reshuffle.
+    val handSeed: Long? = null,
 ) {
     val potOdds: Double get() = if (toCall <= 0) 0.0 else toCall.toDouble() / (pot + toCall)
 }
@@ -65,7 +71,8 @@ class HoldemTrainer(private val baseSeed: Long? = null) {
 
     fun newHand(opponents: Int = 1, heroPosition: Position = randomPosition()): HoldemTable {
         handCounter++
-        deck = Deck(baseSeed?.let { it + handCounter })
+        val thisHandSeed = baseSeed?.let { it + handCounter }
+        deck = Deck(thisHandSeed)
         val hero = deck.dealN(2)
         val script = PreflopScript.generate(heroPosition)
         // Count remaining live opponents from the script's fold/raise calls so
@@ -82,16 +89,19 @@ class HoldemTrainer(private val baseSeed: Long? = null) {
             hero = hero,
             board = emptyList(),
             history = script.records,
+            handSeed = thisHandSeed,
         )
     }
 
     /**
-     * Rebuild internal deck state from a persisted table: a fresh shuffled deck
-     * minus every card that's already on the table (hero + board). Future
-     * `advanceStreet` deals from this pruned deck.
+     * Rebuild internal deck state from a persisted table: reuse the hand's
+     * original seed when available so villain cards and future board cards
+     * match what the user saw before the snapshot. Falls back to a fresh
+     * shuffled deck for legacy snapshots without a stored handSeed. Either
+     * way, cards already on the table are removed so they aren't dealt twice.
      */
     fun restoreFrom(table: HoldemTable) {
-        deck = Deck(baseSeed)
+        deck = Deck(table.handSeed ?: baseSeed)
         deck.removeSpecific(table.hero + table.board)
     }
 
