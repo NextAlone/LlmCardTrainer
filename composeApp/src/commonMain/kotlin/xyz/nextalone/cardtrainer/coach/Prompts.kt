@@ -210,6 +210,18 @@ object Prompts {
             ?: error("hero seat must have hole cards when building a prompt")
         val liveCount = table.seats.count { it.isLive }
         append("【当前街】${table.street}\n")
+        // Flag early-terminated hands so the coach knows not to talk about
+        // a showdown that never happened. MultiwayEngine marks street ==
+        // SHOWDOWN when only one live seat remains, even if the hand folded
+        // on flop with a 3-card board.
+        if (table.street.name == "SHOWDOWN") {
+            val ended = when {
+                liveCount <= 1 -> "单独存活 → 提前结束（未摊牌）"
+                table.board.size < 5 -> "提前结束，公共牌仅 ${table.board.size} 张（未摊牌）"
+                else -> "走完 river，进入摊牌"
+            }
+            append("【本手状态】$ended\n")
+        }
         append("【位置】${hero.position.label}，存活对手数：${liveCount - 1}\n")
         append("【手牌】${heroCards.joinToString(" ") { it.label }}\n")
         if (table.board.isNotEmpty()) {
@@ -274,11 +286,12 @@ object Prompts {
                     "若牌局已结束，只回顾至此街；不要预测尚未翻出的公共牌。" +
                     "本次不输出首行的『【评分】』。"
             MultiwayAnalysisMode.HAND_RECAP ->
-                "本手牌已彻底结束。请给出整手回顾（跨翻前到摊牌）：\n" +
+                "本手牌已彻底结束。请给出整手回顾：\n" +
                     "1. 关键转折点：哪些 action 决定了本手走势（不仅是 hero，也包括对手）；\n" +
                     "2. hero 的整体思路与实际 EV / 真实胜率的差距，是否有情绪 / 位置 / 底池控制方面的系统性倾向；\n" +
                     "3. 与基线相比的 1-2 个可以下次复盘时重点练习的点；\n" +
-                    "4. 若走到摊牌，点评 showdown 牌型分布是否符合预期 range。\n" +
+                    "4. 若【本手状态】为已摊牌，点评 showdown 牌型分布是否符合预期 range；" +
+                    "若为提前结束，则评估 hero 推动/收下这手的施压是否恰当，不要虚构未出现的公共牌或对手底牌。\n" +
                     "语气教练式、具体、避免重复【牌局进程】已罗列的事实。" +
                     "本次不输出首行的『【评分】』。"
         }
