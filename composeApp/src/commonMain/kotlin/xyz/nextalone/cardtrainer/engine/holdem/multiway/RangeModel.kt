@@ -18,6 +18,17 @@ import xyz.nextalone.cardtrainer.engine.holdem.Street
  * Returns a single legal action + amount. The engine is responsible for
  * clamping amounts against stack and minimum-raise rules one more time.
  */
+/**
+ * Opponent tightness profile. STANDARD is the baseline (current behavior).
+ * LOOSE widens cold-calls and reduces post-flop folds so hero gets more
+ * multiway-to-flop spots; TIGHT tightens further for drill-style spots.
+ */
+enum class VillainStyle(val label: String) {
+    TIGHT("紧"),
+    STANDARD("标准"),
+    LOOSE("松"),
+}
+
 object RangeModel {
 
     data class Decision(val action: Action, val amount: Int)
@@ -26,13 +37,17 @@ object RangeModel {
         table: MultiwayTable,
         seatIndex: Int,
         rng: Random = Random.Default,
+        style: VillainStyle = VillainStyle.STANDARD,
     ): Decision {
         val seat = table.seats[seatIndex]
         val toCall = (table.currentBet - seat.contribThisStreet).coerceAtLeast(0)
         return if (table.street == Street.PREFLOP) {
-            preflop(table, seatIndex, toCall, rng)
+            preflop(table, seatIndex, toCall, rng, style)
         } else {
-            postflop(table, seat.stack, toCall, table.pot, table.currentBet, table.lastRaiseSize, rng)
+            postflop(
+                table, seat.stack, toCall, table.pot,
+                table.currentBet, table.lastRaiseSize, rng, style,
+            )
         }
     }
 
@@ -43,6 +58,7 @@ object RangeModel {
         seatIndex: Int,
         toCall: Int,
         rng: Random,
+        style: VillainStyle,
     ): Decision {
         val seat = table.seats[seatIndex]
         val cards = requireNotNull(seat.cards) { "preflop seat must have hole cards" }
@@ -54,9 +70,9 @@ object RangeModel {
         }
 
         return when (raiseCount) {
-            0 -> openDecision(seat.position, cards, code, seat.stack, rng)
-            1 -> vsOpenDecision(code, toCall, seat.stack, maxContrib, rng)
-            else -> vsThreeBetDecision(code, toCall, seat.stack, rng)
+            0 -> openDecision(seat.position, cards, code, seat.stack, rng, style)
+            1 -> vsOpenDecision(code, toCall, seat.stack, maxContrib, rng, style)
+            else -> vsThreeBetDecision(code, toCall, seat.stack, rng, style)
         }
     }
 
@@ -66,6 +82,7 @@ object RangeModel {
         code: String,
         stack: Int,
         rng: Random,
+        style: VillainStyle,
     ): Decision {
         val rfi = PreflopChart.rfiAction(position, cards)
         return when (rfi) {
@@ -76,10 +93,23 @@ object RangeModel {
             PreflopAction.CALL -> Decision(Action.CALL, 0)  // unused by chart today
             PreflopAction.FOLD -> {
                 // Small SB limp freq when unraised — approximated via tiny random
-                if (position == Position.SB && rng.nextDouble() < 0.15) {
-                    Decision(Action.CALL, 0)
-                } else {
-                    Decision(Action.FOLD, 0)
+                val sbLimp = when (style) {
+                    VillainStyle.TIGHT -> 0.05
+                    VillainStyle.STANDARD -> 0.15
+                    VillainStyle.LOOSE -> 0.30
+                }
+                val fishLimp = when (style) {
+                    VillainStyle.TIGHT -> 0.0
+                    VillainStyle.STANDARD -> 0.0
+                    // Loose tables also see mid-position limps with speculative
+                    // hands once in a while — wider ranges saw a limp-first
+                    // spot into your flop decision.
+                    VillainStyle.LOOSE -> if (code in LOOSE_LIMPY) 0.30 else 0.0
+                }
+                when {
+                    position == Position.SB && rng.nextDouble() < sbLimp -> Decision(Action.CALL, 0)
+                    fishLimp > 0 && rng.nextDouble() < fishLimp -> Decision(Action.CALL, 0)
+                    else -> Decision(Action.FOLD, 0)
                 }
             }
         }
@@ -91,25 +121,54 @@ object RangeModel {
         stack: Int,
         currentBet: Int,
         rng: Random,
+        style: VillainStyle,
     ): Decision {
         val r = rng.nextDouble()
+        val coldCall = when (style) {
+            VillainStyle.TIGHT -> COLD_CALL_RANGE
+            VillainStyle.STANDARD -> COLD_CALL_RANGE
+            VillainStyle.LOOSE -> COLD_CALL_RANGE + COLD_CALL_LOOSE_EXT
+        }
+        val threeBet = when (style) {
+            VillainStyle.TIGHT -> PREMIUM_3BET
+            VillainStyle.STANDARD -> PREMIUM_3BET
+            VillainStyle.LOOSE -> PREMIUM_3BET + BLUFF_3BET_LOOSE
+        }
+        // Loose opponents fold cold-calls less often; tight opponents fold more.
+        val callThreshold = when (style) {
+            VillainStyle.TIGHT -> 0.70
+            VillainStyle.STANDARD -> 0.85
+            VillainStyle.LOOSE -> 0.95
+        }
         return when {
-            code in PREMIUM_3BET -> {
+            code in threeBet -> {
                 val threeBetTo = (currentBet * 3).coerceAtMost(stack)
                 Decision(Action.RAISE, threeBetTo)
             }
-            code in COLD_CALL_RANGE -> {
-                if (r < 0.85) Decision(Action.CALL, toCall.coerceAtMost(stack))
+            code in coldCall -> {
+                if (r < callThreshold) Decision(Action.CALL, toCall.coerceAtMost(stack))
                 else Decision(Action.FOLD, 0)
             }
             else -> Decision(Action.FOLD, 0)
         }
     }
 
-    private fun vsThreeBetDecision(code: String, toCall: Int, stack: Int, rng: Random): Decision {
+    private fun vsThreeBetDecision(
+        code: String,
+        toCall: Int,
+        stack: Int,
+        rng: Random,
+        style: VillainStyle,
+    ): Decision {
+        // Loose adds JJ / AQs to the call-three-bet pool; tight keeps it.
+        val callPool = when (style) {
+            VillainStyle.TIGHT -> CALL_THREE_BET
+            VillainStyle.STANDARD -> CALL_THREE_BET
+            VillainStyle.LOOSE -> CALL_THREE_BET + setOf("TT", "99", "AJs", "KQs")
+        }
         return when {
             code in FOUR_BET_ONLY -> Decision(Action.RAISE, stack) // jam / large 4-bet
-            code in CALL_THREE_BET -> Decision(Action.CALL, toCall.coerceAtMost(stack))
+            code in callPool -> Decision(Action.CALL, toCall.coerceAtMost(stack))
             else -> Decision(Action.FOLD, 0)
         }
     }
@@ -124,6 +183,7 @@ object RangeModel {
         currentBet: Int,
         lastRaise: Int,
         rng: Random,
+        style: VillainStyle,
     ): Decision {
         val r = rng.nextDouble()
         if (toCall == 0) {
@@ -137,13 +197,19 @@ object RangeModel {
         }
         // Facing a bet. Pot odds = toCall / (pot + toCall).
         val potOdds = toCall.toDouble() / (pot + toCall).coerceAtLeast(1)
-        val foldProb = when {
+        val foldBase = when {
             potOdds <= 0.20 -> 0.15   // <= 1/3 pot bet
             potOdds <= 0.28 -> 0.30   // ~ 1/2 pot
             potOdds <= 0.34 -> 0.50   // ~ 2/3 pot
             potOdds <= 0.40 -> 0.65   // pot-sized
             else -> 0.80              // overbet
         }
+        // Style shifts fold probability uniformly across sizings.
+        val foldProb = (foldBase + when (style) {
+            VillainStyle.TIGHT -> 0.10
+            VillainStyle.STANDARD -> 0.0
+            VillainStyle.LOOSE -> -0.20
+        }).coerceIn(0.05, 0.95)
         val raiseProb = when {
             potOdds <= 0.25 -> 0.08
             potOdds <= 0.34 -> 0.06
@@ -175,4 +241,20 @@ object RangeModel {
     )
     private val FOUR_BET_ONLY = setOf("AA", "KK", "AKs")
     private val CALL_THREE_BET = setOf("QQ", "JJ", "AKo", "AQs")
+
+    // Loose extensions — added onto the baseline ranges when the user picks
+    // the 'Loose' style, giving hero more action than the baseline tight
+    // chart would produce.
+    private val COLD_CALL_LOOSE_EXT = setOf(
+        "66", "55", "44", "33", "22",
+        "A9s", "A8s", "A7s", "A6s", "A5s",
+        "K9s", "KTo", "Q9s", "QTo", "J9s", "T8s", "98s", "87s", "76s", "65s",
+        "KQo", "QJo",
+    )
+    private val BLUFF_3BET_LOOSE = setOf("AQo", "AJs", "A5s", "A4s", "T9s", "76s")
+    private val LOOSE_LIMPY = setOf(
+        "66", "55", "44", "33", "22",
+        "T9s", "98s", "87s", "76s", "65s", "54s",
+        "K9s", "Q9s", "J9s",
+    )
 }

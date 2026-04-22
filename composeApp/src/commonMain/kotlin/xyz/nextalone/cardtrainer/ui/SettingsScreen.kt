@@ -312,6 +312,27 @@ private fun EngineToggle(settings: AppSettings) {
                 }
             }
             Spacer(Modifier.size(10.dp))
+            Text("对手风格", style = MaterialTheme.typography.labelMedium)
+            var villainStyle by remember { mutableStateOf(settings.villainStyle) }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                xyz.nextalone.cardtrainer.engine.holdem.multiway.VillainStyle.entries.forEach { s ->
+                    FilterChip(
+                        selected = villainStyle == s,
+                        onClick = {
+                            villainStyle = s
+                            settings.villainStyle = s
+                        },
+                        label = { Text(s.label) },
+                    )
+                }
+            }
+            Text(
+                "紧 = 更严格的开牌 / 跟注范围，多家弃牌；标准 = 当前基线；松 = 扩大冷跟" +
+                    "与 3-bet 偷鸡，多家到翻牌，翻后不轻易弃牌。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.size(10.dp))
             var revealNow by remember { mutableStateOf(settings.revealSituationImmediately) }
             FilterChip(
                 selected = revealNow,

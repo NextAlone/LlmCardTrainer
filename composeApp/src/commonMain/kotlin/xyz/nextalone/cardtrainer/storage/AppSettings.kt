@@ -3,6 +3,7 @@ package xyz.nextalone.cardtrainer.storage
 import xyz.nextalone.cardtrainer.coach.ProviderConfig
 import xyz.nextalone.cardtrainer.coach.ProviderKind
 import xyz.nextalone.cardtrainer.coach.ReasoningMode
+import xyz.nextalone.cardtrainer.engine.holdem.multiway.VillainStyle
 import com.russhwolf.settings.Settings
 
 class AppSettings(private val settings: Settings) {
@@ -65,6 +66,19 @@ class AppSettings(private val settings: Settings) {
         get() = settings.getBoolean(KEY_REVEAL_SITUATION, false)
         set(value) = settings.putBoolean(KEY_REVEAL_SITUATION, value)
 
+    /**
+     * Opponent tightness profile for the multiway engine. STANDARD keeps
+     * the canonical chart ranges; LOOSE widens cold-calls and reduces
+     * post-flop folds so hero sees more multiway-to-flop spots.
+     */
+    var villainStyle: VillainStyle
+        get() = runCatching {
+            VillainStyle.valueOf(
+                settings.getString(KEY_VILLAIN_STYLE, VillainStyle.STANDARD.name),
+            )
+        }.getOrDefault(VillainStyle.STANDARD)
+        set(value) = settings.putString(KEY_VILLAIN_STYLE, value.name)
+
     /** Active provider config for use by coach. */
     fun activeConfig(): ProviderConfig {
         val k = providerKind
@@ -98,6 +112,7 @@ class AppSettings(private val settings: Settings) {
         private const val KEY_MULTIWAY = "engine.multiway_enabled"
         private const val KEY_MULTIWAY_OPPONENTS = "engine.multiway_opponents"
         private const val KEY_REVEAL_SITUATION = "coach.reveal_situation_immediately"
+        private const val KEY_VILLAIN_STYLE = "engine.villain_style"
     }
 }
 

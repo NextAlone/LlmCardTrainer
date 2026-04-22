@@ -92,12 +92,13 @@ object MultiwayEngine {
     fun stepUntilHero(
         table: MultiwayTable,
         rng: Random = Random.Default,
+        style: VillainStyle = VillainStyle.STANDARD,
     ): MultiwayTable {
         var state = table
         var guard = 0
         while (!state.isHeroTurn && !state.isStreetClosed && !isHandOver(state) && guard < 100) {
             guard++
-            val decision = RangeModel.decide(state, state.toActIndex, rng)
+            val decision = RangeModel.decide(state, state.toActIndex, rng, style)
             state = applySeatDecision(state, state.toActIndex, decision)
         }
         return state

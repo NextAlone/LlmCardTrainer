@@ -415,7 +415,11 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
             return@LaunchedEffect
         }
         delay(300)
-        table = MultiwayEngine.stepUntilHero(current, rng = kotlin.random.Random.Default)
+        table = MultiwayEngine.stepUntilHero(
+            current,
+            rng = kotlin.random.Random.Default,
+            style = settings.villainStyle,
+        )
     }
 
     fun advanceStreet() {
