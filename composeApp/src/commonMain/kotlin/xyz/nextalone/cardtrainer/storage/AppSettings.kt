@@ -55,6 +55,16 @@ class AppSettings(private val settings: Settings) {
         get() = settings.getInt(KEY_MULTIWAY_OPPONENTS, 3).coerceIn(1, 5)
         set(value) = settings.putInt(KEY_MULTIWAY_OPPONENTS, value.coerceIn(1, 5))
 
+    /**
+     * If true, the A-tab situation analysis stays visible while the hero is
+     * still deciding. Default off — the usual flow hides it until submit so
+     * users form their own opinion first. Power users can flip this when
+     * they want the coach to narrate in real time.
+     */
+    var revealSituationImmediately: Boolean
+        get() = settings.getBoolean(KEY_REVEAL_SITUATION, false)
+        set(value) = settings.putBoolean(KEY_REVEAL_SITUATION, value)
+
     /** Active provider config for use by coach. */
     fun activeConfig(): ProviderConfig {
         val k = providerKind
@@ -87,6 +97,7 @@ class AppSettings(private val settings: Settings) {
         private const val KEY_PROVIDER = "active_provider"
         private const val KEY_MULTIWAY = "engine.multiway_enabled"
         private const val KEY_MULTIWAY_OPPONENTS = "engine.multiway_opponents"
+        private const val KEY_REVEAL_SITUATION = "coach.reveal_situation_immediately"
     }
 }
 

@@ -311,6 +311,24 @@ private fun EngineToggle(settings: AppSettings) {
                     )
                 }
             }
+            Spacer(Modifier.size(10.dp))
+            var revealNow by remember { mutableStateOf(settings.revealSituationImmediately) }
+            FilterChip(
+                selected = revealNow,
+                onClick = {
+                    revealNow = !revealNow
+                    settings.revealSituationImmediately = revealNow
+                },
+                label = {
+                    Text(if (revealNow) "情境分析即时揭晓（已开）" else "提交后再揭晓 AI 情境分析")
+                },
+            )
+            Text(
+                "默认关闭 · 关闭时 A 槽会等到你提交本街决策后才显示，避免偷看基线；" +
+                    "开启后分析完成就展示。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

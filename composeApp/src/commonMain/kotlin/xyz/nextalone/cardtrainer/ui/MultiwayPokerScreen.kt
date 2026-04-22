@@ -195,6 +195,9 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         if (cfg.apiKey.isBlank()) {
             situationErrorByStreet = situationErrorByStreet +
                 (street to "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。")
+            // Drop any stale loading marker so the top-bar 'AI 预载' chip
+            // doesn't get stuck after an early return.
+            situationLoadingFor = situationLoadingFor - street
             return
         }
         situationLoadingFor = situationLoadingFor + street
@@ -247,6 +250,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         if (cfg.apiKey.isBlank()) {
             evaluationErrorByStreet = evaluationErrorByStreet +
                 (forStreet to "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。")
+            evaluationLoadingFor = evaluationLoadingFor - forStreet
             return
         }
         evaluationLoadingFor = evaluationLoadingFor + forStreet
@@ -285,6 +289,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         val cfg = settings.activeConfig()
         if (cfg.apiKey.isBlank()) {
             errorHandRecap = "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。"
+            loadingHandRecap = false
             return
         }
         loadingHandRecap = true
@@ -326,6 +331,7 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         if (cfg.apiKey.isBlank()) {
             recapErrorByStreet = recapErrorByStreet +
                 (street to "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。")
+            recapLoadingFor = recapLoadingFor - street
             return
         }
         recapLoadingFor = recapLoadingFor + street
@@ -622,7 +628,8 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                         errorEvaluation = evaluationErrorByStreet[selectedStreet],
                         errorRecap = recapErrorByStreet[selectedStreet],
                         errorHandRecap = errorHandRecap,
-                        situationRevealed = (revealedFor != null && selectedStreet == revealedFor) ||
+                        situationRevealed = settings.revealSituationImmediately ||
+                            (revealedFor != null && selectedStreet == revealedFor) ||
                             (selectedStreet != table.street) ||
                             outcome != null,
                         handSettled = outcome != null,
