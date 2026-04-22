@@ -56,24 +56,38 @@ class OpenAiProvider(
         messages: List<ChatTurn>,
         maxTokens: Int,
     ): String {
-        val body = ChatRequest(
-            model = model,
-            maxTokens = maxTokens,
-            messages = buildList {
-                add(RequestMessage(role = "system", content = systemPrompt))
-                messages.forEach {
-                    add(
-                        RequestMessage(
-                            role = when (it.role) {
-                                ChatTurn.Role.USER -> "user"
-                                ChatTurn.Role.ASSISTANT -> "assistant"
-                            },
-                            content = it.content,
-                        ),
-                    )
-                }
-            },
-        )
+        val shape = modelShape(model)
+        val requestMessages = buildList {
+            add(RequestMessage(role = "system", content = systemPrompt))
+            messages.forEach {
+                add(
+                    RequestMessage(
+                        role = when (it.role) {
+                            ChatTurn.Role.USER -> "user"
+                            ChatTurn.Role.ASSISTANT -> "assistant"
+                        },
+                        content = it.content,
+                    ),
+                )
+            }
+        }
+        val body: ChatRequest = when (shape) {
+            ModelShape.OPENAI_REASONING -> ChatRequest(
+                model = model,
+                messages = requestMessages,
+                // o-series uses max_completion_tokens; temperature is locked
+                // to 1 server-side, so we omit the field entirely.
+                maxCompletionTokens = maxTokens,
+                reasoningEffort = "medium",
+                temperature = null,
+            )
+            ModelShape.CHAT -> ChatRequest(
+                model = model,
+                messages = requestMessages,
+                maxTokens = maxTokens,
+                temperature = 0.4,
+            )
+        }
         val resp: ChatResponse = client.post(endpoint) {
             header("Authorization", "Bearer $apiKey")
             contentType(ContentType.Application.Json)
@@ -87,6 +101,18 @@ class OpenAiProvider(
         return ResponseCleanup.cleanOrRaw(raw)
     }
 
+    private enum class ModelShape { OPENAI_REASONING, CHAT }
+
+    private fun modelShape(id: String): ModelShape {
+        val lower = id.lowercase()
+        val openAiReasoningPrefixes = listOf("o1", "o3", "o4", "gpt-5")
+        return if (openAiReasoningPrefixes.any { lower.startsWith(it) }) {
+            ModelShape.OPENAI_REASONING
+        } else {
+            ModelShape.CHAT
+        }
+    }
+
     override fun close() = client.close()
 }
 
@@ -94,8 +120,10 @@ class OpenAiProvider(
 private data class ChatRequest(
     val model: String,
     val messages: List<RequestMessage>,
-    @SerialName("max_tokens") val maxTokens: Int,
-    val temperature: Double = 0.4,
+    @SerialName("max_tokens") val maxTokens: Int? = null,
+    @SerialName("max_completion_tokens") val maxCompletionTokens: Int? = null,
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
+    val temperature: Double? = null,
 )
 
 @Serializable
