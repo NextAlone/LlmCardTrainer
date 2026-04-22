@@ -74,6 +74,31 @@ class SidePotBuilderTest {
     }
 
     @Test
+    fun dead_money_above_highest_live_level_lands_in_deepest_pot() {
+        // Pathological over-bet scenario: BTN folded 150, UTG all-in 30,
+        // BB all-in 50. Live levels = [30, 50]. Dead money (above 50) = 100
+        // must attach to the deepest side pot (eligible only to BB), not to
+        // the main pot (which would unfairly reward UTG's short all-in).
+        val seats = listOf(
+            seat(Position.UTG, 30, allIn = true),
+            seat(Position.BTN, 150, folded = true),
+            seat(Position.BB, 50, allIn = true),
+        )
+        val pots = SidePotBuilder.build(seats)
+        assertEquals(2, pots.size)
+        // Main pot: 3 * 30 = 90, eligible live seats at level 30 → [UTG(0), BB(2)].
+        assertEquals(90, pots[0].amount)
+        assertEquals(listOf(0, 2), pots[0].eligibleSeats)
+        // Deepest pot: live layer 30→50 = (0 + 20 + 20) = 40, PLUS dead money 100 → 140.
+        // Eligible only [BB(2)]; folded BTN never eligible anywhere.
+        assertEquals(140, pots[1].amount)
+        assertEquals(listOf(2), pots[1].eligibleSeats)
+        // Sanity: total money conserved, folded seat never eligible.
+        assertEquals(30 + 150 + 50, pots.sumOf { it.amount })
+        assertTrue(pots.none { 1 in it.eligibleSeats })
+    }
+
+    @Test
     fun sole_survivor_gets_one_pot_even_without_showdown() {
         val seats = listOf(
             seat(Position.UTG, 10, folded = true),

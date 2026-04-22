@@ -10,8 +10,13 @@ package xyz.nextalone.cardtrainer.engine.holdem.multiway
  * `totalContrib >= level`.
  *
  * Folded seats contribute their chips but cannot win — any "dead money"
- * they contributed above the highest live level is added to the main
- * (first) pot, as is standard.
+ * they contributed above the highest live level is added to the last
+ * (deepest) pot as a conservative approximation. The strictly correct
+ * NLHE rule is to refund an uncalled over-bet to the contributor; the
+ * engine currently has no refund path, and routing dead money to the
+ * main pot would let short all-in seats win chips they never had to
+ * cover. Routing it to the deepest side pot at least restricts the
+ * windfall to a seat that contested up to that level.
  */
 object SidePotBuilder {
 
@@ -43,10 +48,12 @@ object SidePotBuilder {
         val totalMoney = seats.sumOf { it.totalContrib }
         val dealt = pots.sumOf { it.amount }
         if (dealt < totalMoney && pots.isNotEmpty()) {
-            // Dead money from folded seats above highest live level goes into
-            // the main pot (first pot).
+            // Dead money from folded seats above the highest live level goes
+            // into the deepest pot. See class-level kdoc for why main-pot was
+            // wrong and why a refund is the truly correct behavior.
             val deadMoney = totalMoney - dealt
-            pots[0] = pots[0].copy(amount = pots[0].amount + deadMoney)
+            val last = pots.lastIndex
+            pots[last] = pots[last].copy(amount = pots[last].amount + deadMoney)
         } else if (pots.isEmpty() && totalMoney > 0) {
             // Everyone folded except one live seat — return a single pot for
             // that seat. Callers can award without comparing.
