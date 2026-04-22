@@ -220,11 +220,13 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         )
         val coach = LlmProviders.create(cfg)
         try {
-            val reply = withRetry {
-                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            val verbose = withRetry {
+                coach.coachVerbose(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
+            val reply = verbose.content
+            val reasoning = verbose.reasoning
             situationByStreet = situationByStreet +
-                (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)))
+                (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply, reasoning)))
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -257,11 +259,13 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         )
         val coach = LlmProviders.create(cfg)
         try {
-            val reply = withRetry {
-                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            val verbose = withRetry {
+                coach.coachVerbose(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
+            val reply = verbose.content
+            val reasoning = verbose.reasoning
             evaluationByStreet = evaluationByStreet +
-                (forStreet to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)))
+                (forStreet to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply, reasoning)))
             val parsed = parseMultiScores(reply, submissions.size)
             if (parsed.isNotEmpty()) {
                 scoreByStreet = scoreByStreet + (forStreet to parsed)
@@ -300,10 +304,12 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         )
         val coach = LlmProviders.create(cfg)
         try {
-            val reply = withRetry {
-                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            val verbose = withRetry {
+                coach.coachVerbose(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
-            handRecapTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)
+            val reply = verbose.content
+            val reasoning = verbose.reasoning
+            handRecapTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply, reasoning)
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -339,11 +345,13 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
         )
         val coach = LlmProviders.create(cfg)
         try {
-            val reply = withRetry {
-                coach.coach(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            val verbose = withRetry {
+                coach.coachVerbose(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
             }
+            val reply = verbose.content
+            val reasoning = verbose.reasoning
             recapByStreet = recapByStreet +
-                (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply)))
+                (street to (seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply, reasoning)))
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -1431,8 +1439,10 @@ private fun CoachPane(
     stripScore: Boolean = false,
     onRetry: (() -> Unit)? = null,
 ) {
-    val raw = turns.lastOrNull { it.role == ChatTurn.Role.ASSISTANT }?.content
+    val lastAssistant = turns.lastOrNull { it.role == ChatTurn.Role.ASSISTANT }
+    val raw = lastAssistant?.content
     val assistant = if (raw != null && stripScore) stripLeadingScore(raw) else raw
+    val reasoning = lastAssistant?.reasoning?.takeUnless { it.isBlank() }
     when {
         error != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
@@ -1459,12 +1469,57 @@ private fun CoachPane(
             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             Text("分析中…", style = MaterialTheme.typography.bodySmall, color = BrandTheme.colors.fgMuted)
         }
-        assistant != null -> AiMarkdown(assistant)
+        assistant != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (reasoning != null) ReasoningDisclosure(reasoning)
+            AiMarkdown(assistant)
+        }
         else -> Text(
             emptyHint,
             style = MaterialTheme.typography.bodySmall,
             color = BrandTheme.colors.fgMuted,
         )
+    }
+}
+
+@Composable
+private fun ReasoningDisclosure(text: String) {
+    var expanded by remember { mutableStateOf(false) }
+    val c = BrandTheme.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(c.fgMuted.copy(alpha = 0.06f))
+            .border(1.dp, c.fgMuted.copy(alpha = 0.18f), RoundedCornerShape(8.dp)),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (expanded) "▾ 思考过程" else "▸ 思考过程",
+                style = MaterialTheme.typography.labelSmall,
+                color = c.fgMuted,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                "${text.length} 字",
+                style = MaterialTheme.typography.labelSmall,
+                color = c.fgMuted,
+            )
+        }
+        if (expanded) {
+            BrandDivider()
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall,
+                color = c.fgMuted,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            )
+        }
     }
 }
 
