@@ -6,13 +6,20 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * OpenAI Chat Completions-compatible client.
@@ -129,6 +136,80 @@ class OpenAiProvider(
         }
     }
 
+    override fun streamCoach(
+        systemPrompt: String,
+        messages: List<ChatTurn>,
+        maxTokens: Int,
+    ): Flow<CoachDelta> = flow {
+        val shape = modelShape(model)
+        val requestMessages = buildList {
+            add(RequestMessage(role = "system", content = systemPrompt))
+            messages.forEach {
+                add(
+                    RequestMessage(
+                        role = when (it.role) {
+                            ChatTurn.Role.USER -> "user"
+                            ChatTurn.Role.ASSISTANT -> "assistant"
+                        },
+                        content = it.content,
+                    ),
+                )
+            }
+        }
+        val body: ChatRequest = when (shape) {
+            ModelShape.OPENAI_REASONING -> ChatRequest(
+                model = model,
+                messages = requestMessages,
+                maxCompletionTokens = maxTokens,
+                reasoningEffort = "medium",
+                temperature = null,
+                stream = true,
+            )
+            ModelShape.CHAT -> ChatRequest(
+                model = model,
+                messages = requestMessages,
+                maxTokens = maxTokens,
+                temperature = 0.4,
+                stream = true,
+            )
+        }
+        client.preparePost(endpoint) {
+            header("Authorization", "Bearer $apiKey")
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }.execute { response ->
+            val channel = response.bodyAsChannel()
+            while (!channel.isClosedForRead) {
+                val line = channel.readUTF8Line() ?: break
+                if (!line.startsWith("data:")) continue
+                val payload = line.removePrefix("data:").trim()
+                if (payload.isEmpty()) continue
+                if (payload == "[DONE]") break
+                val delta = runCatching { json.parseToJsonElement(payload).jsonObject }
+                    .getOrNull()
+                    ?.get("choices")
+                    ?.let { it as? kotlinx.serialization.json.JsonArray }
+                    ?.firstOrNull()
+                    ?.jsonObject
+                    ?.get("delta")
+                    ?.jsonObject
+                    ?: continue
+                delta["content"]?.jsonPrimitive?.content
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { emit(CoachDelta.Content(it)) }
+                // DeepSeek-R1 / Qwen-QwQ OpenAI-compat proxies stream a
+                // 'reasoning_content' delta alongside or before 'content'.
+                delta["reasoning_content"]?.jsonPrimitive?.content
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { emit(CoachDelta.Reasoning(it)) }
+                delta["thinking"]?.jsonPrimitive?.content
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { emit(CoachDelta.Reasoning(it)) }
+            }
+        }
+        emit(CoachDelta.Done)
+    }
+
     override fun close() = client.close()
 }
 
@@ -140,6 +221,7 @@ private data class ChatRequest(
     @SerialName("max_completion_tokens") val maxCompletionTokens: Int? = null,
     @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     val temperature: Double? = null,
+    val stream: Boolean = false,
 )
 
 @Serializable

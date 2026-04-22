@@ -6,13 +6,20 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Anthropic Messages API client (POST {baseUrl}/v1/messages).
@@ -115,6 +122,67 @@ class AnthropicProvider(
         }
     }
 
+    override fun streamCoach(
+        systemPrompt: String,
+        messages: List<ChatTurn>,
+        maxTokens: Int,
+    ): Flow<CoachDelta> = flow {
+        val thinkingEnabled = useExtendedThinking()
+        val thinking = if (thinkingEnabled) {
+            val budget = (maxTokens / 3).coerceIn(1024, 10_000)
+                .coerceAtMost(maxTokens - 256)
+            if (budget >= 1024) Thinking(budgetTokens = budget) else null
+        } else null
+        val request = MessageRequest(
+            model = model,
+            maxTokens = maxTokens,
+            system = listOf(
+                SystemBlock(text = systemPrompt, cacheControl = CacheControl("ephemeral")),
+            ),
+            messages = messages.map {
+                Message(
+                    role = when (it.role) {
+                        ChatTurn.Role.USER -> "user"
+                        ChatTurn.Role.ASSISTANT -> "assistant"
+                    },
+                    content = it.content,
+                )
+            },
+            thinking = thinking,
+            temperature = if (thinking != null) 1.0 else null,
+            stream = true,
+        )
+        client.preparePost(endpoint) {
+            header("x-api-key", apiKey)
+            header("anthropic-version", API_VERSION)
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.execute { response ->
+            val channel = response.bodyAsChannel()
+            while (!channel.isClosedForRead) {
+                val line = channel.readUTF8Line() ?: break
+                if (!line.startsWith("data:")) continue
+                val payload = line.removePrefix("data:").trim()
+                if (payload.isEmpty()) continue
+                // content_block_delta with delta.type == text_delta / thinking_delta
+                val obj = runCatching { json.parseToJsonElement(payload).jsonObject }
+                    .getOrNull() ?: continue
+                val type = obj["type"]?.jsonPrimitive?.content
+                if (type != "content_block_delta") continue
+                val delta = obj["delta"]?.jsonObject ?: continue
+                when (delta["type"]?.jsonPrimitive?.content) {
+                    "text_delta" -> delta["text"]?.jsonPrimitive?.content
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { emit(CoachDelta.Content(it)) }
+                    "thinking_delta" -> delta["thinking"]?.jsonPrimitive?.content
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { emit(CoachDelta.Reasoning(it)) }
+                }
+            }
+        }
+        emit(CoachDelta.Done)
+    }
+
     override fun close() = client.close()
 
     companion object { private const val API_VERSION = "2023-06-01" }
@@ -128,6 +196,7 @@ private data class MessageRequest(
     val messages: List<Message>,
     val thinking: Thinking? = null,
     val temperature: Double? = null,
+    val stream: Boolean = false,
 )
 
 @Serializable

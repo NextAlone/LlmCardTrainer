@@ -307,14 +307,34 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                 ),
             ),
         )
+        // Streaming path: recap is the longest single response, so we use
+        // streamCoach and update state per chunk. No withRetry here — once
+        // deltas are visible, retrying would duplicate content; users can
+        // hit the retry button after a failure.
         val coach = LlmProviders.create(cfg)
+        val contentBuf = StringBuilder()
+        val reasoningBuf = StringBuilder()
+        handRecapTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, "")
         try {
-            val verbose = withRetry {
-                coach.coachVerbose(systemPrompt = Prompts.HOLDEM_SYSTEM, messages = seed)
+            coach.streamCoach(
+                systemPrompt = Prompts.HOLDEM_SYSTEM,
+                messages = seed,
+            ).collect { delta ->
+                when (delta) {
+                    is xyz.nextalone.cardtrainer.coach.CoachDelta.Content -> {
+                        contentBuf.append(delta.text)
+                    }
+                    is xyz.nextalone.cardtrainer.coach.CoachDelta.Reasoning -> {
+                        reasoningBuf.append(delta.text)
+                    }
+                    xyz.nextalone.cardtrainer.coach.CoachDelta.Done -> {}
+                }
+                handRecapTurns = seed + ChatTurn(
+                    ChatTurn.Role.ASSISTANT,
+                    contentBuf.toString(),
+                    reasoningBuf.toString().ifEmpty { null },
+                )
             }
-            val reply = verbose.content
-            val reasoning = verbose.reasoning
-            handRecapTurns = seed + ChatTurn(ChatTurn.Role.ASSISTANT, reply, reasoning)
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {

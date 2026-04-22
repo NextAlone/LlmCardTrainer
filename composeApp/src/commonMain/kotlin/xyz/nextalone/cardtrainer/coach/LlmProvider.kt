@@ -1,5 +1,8 @@
 package xyz.nextalone.cardtrainer.coach
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+
 /**
  * User-chosen reasoning shape. AUTO falls back to a name-based guess so
  * that out-of-the-box experience works for canonical model ids, but the
@@ -54,6 +57,20 @@ data class ProviderConfig(
  */
 data class CoachReply(val content: String, val reasoning: String? = null)
 
+/**
+ * Incremental event emitted by [LlmProvider.streamCoach]. Flows end with
+ * exactly one [Done]; errors are raised as flow exceptions by convention so
+ * callers can use `catch` / `retry` idiomatically.
+ */
+sealed class CoachDelta {
+    /** Appends to the visible answer. */
+    data class Content(val text: String) : CoachDelta()
+    /** Appends to the internal reasoning / thinking trace (UI folds it). */
+    data class Reasoning(val text: String) : CoachDelta()
+    /** Terminal marker — no more deltas after this. */
+    data object Done : CoachDelta()
+}
+
 interface LlmProvider {
     /**
      * Budget used by [coach] when callers don't override [maxTokens]. Set by
@@ -91,6 +108,30 @@ interface LlmProvider {
         messages: List<ChatTurn>,
         maxTokens: Int = defaultMaxTokens,
     ): CoachReply
+
+    /**
+     * Streaming variant. Default implementation just buffers the blocking
+     * [coachVerbose] call and emits it as a single [CoachDelta.Content] +
+     * optional [CoachDelta.Reasoning] followed by [CoachDelta.Done], so
+     * callers can write streaming-shaped code against every provider even
+     * before SSE is wired up per vendor. Overridden by providers that
+     * actually consume SSE.
+     *
+     * Error semantics: the flow throws if the request fails before any
+     * delta is emitted; callers can wrap with `retry { it !is CancellationException }`.
+     * Once content has been streamed, a mid-stream error becomes a terminal
+     * flow exception — retrying would double-emit.
+     */
+    fun streamCoach(
+        systemPrompt: String,
+        messages: List<ChatTurn>,
+        maxTokens: Int = defaultMaxTokens,
+    ): Flow<CoachDelta> = flow {
+        val reply = coachVerbose(systemPrompt, messages, maxTokens)
+        reply.reasoning?.takeUnless { it.isBlank() }?.let { emit(CoachDelta.Reasoning(it)) }
+        if (reply.content.isNotEmpty()) emit(CoachDelta.Content(reply.content))
+        emit(CoachDelta.Done)
+    }
 
     /** Convenience: one-shot single-user-turn call. */
     suspend fun coach(
