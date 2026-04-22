@@ -35,6 +35,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -435,8 +436,19 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
 
     // Background Situation runs on hero's first turn of the street, but the
     // result stays hidden in the A tab until the hero submits.
+    //
+    // situationFor locks a street only after runSituation decides the request
+    // is worth attempting (i.e. API key present). If the user had no key on
+    // first entry, situationFor stays null so the A-tab Retry button can
+    // re-fire runSituation once they come back with credentials.
     LaunchedEffect(table.isHeroTurn, table.street, handSeed) {
         if (table.isHeroTurn && situationFor != table.street) {
+            val cfg = settings.activeConfig()
+            if (cfg.apiKey.isBlank()) {
+                situationErrorByStreet = situationErrorByStreet +
+                    (table.street to "请先在『设置』中填写 ${cfg.kind.label} 的 API Key。")
+                return@LaunchedEffect
+            }
             situationFor = table.street
             runSituation(table)
         }
@@ -450,6 +462,10 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     }
 
     fun submitAction(action: Action, amount: Int) {
+        // Rapid double-tap on the same sheet row would otherwise append the
+        // action to heroSubmissionsByStreet twice (and applyHeroAction on a
+        // non-hero turn would throw). Guard at the submit entry.
+        if (!table.isHeroTurn) return
         val choice = action to amount
         userChoice = choice
         val snapForEval = table
@@ -597,6 +613,23 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
                             (selectedStreet != table.street) ||
                             outcome != null,
                         handSettled = outcome != null,
+                        onSituationRetry = {
+                            val snap = table
+                            situationErrorByStreet = situationErrorByStreet - snap.street
+                            situationFor = snap.street
+                            scope.launch { runSituation(snap) }
+                        },
+                        onRecapRetry = {
+                            val snap = table
+                            recapErrorByStreet = recapErrorByStreet - snap.street
+                            recapFor = snap.street
+                            scope.launch { runRecap(snap) }
+                        },
+                        onHandRecapRetry = {
+                            val snap = table
+                            errorHandRecap = null
+                            scope.launch { runHandRecap(snap) }
+                        },
                     )
                     // Spacer so the last card isn't hidden under the pinned bar.
                     Spacer(Modifier.height(72.dp))
@@ -1308,6 +1341,9 @@ private fun CoachTabsBlock(
     errorHandRecap: String?,
     situationRevealed: Boolean,
     handSettled: Boolean,
+    onSituationRetry: (() -> Unit)? = null,
+    onRecapRetry: (() -> Unit)? = null,
+    onHandRecapRetry: (() -> Unit)? = null,
 ) {
     BrandSurface {
         val eyebrowLabel = if (selectedStreet != currentStreet) {
@@ -1338,6 +1374,7 @@ private fun CoachTabsBlock(
                     loading = loadingSituation,
                     error = errorSituation,
                     emptyHint = "本街情境加载中…",
+                    onRetry = onSituationRetry?.takeIf { selectedStreet == currentStreet },
                 )
             }
             1 -> CoachPane(
@@ -1352,6 +1389,7 @@ private fun CoachTabsBlock(
                 loading = loadingRecap,
                 error = errorRecap,
                 emptyHint = "每街结束给全桌回顾。",
+                onRetry = onRecapRetry?.takeIf { selectedStreet == currentStreet },
             )
             else -> if (!handSettled) {
                 Text(
@@ -1365,6 +1403,7 @@ private fun CoachTabsBlock(
                     loading = loadingHandRecap,
                     error = errorHandRecap,
                     emptyHint = "整手总结加载中…",
+                    onRetry = onHandRecapRetry,
                 )
             }
         }
@@ -1378,15 +1417,29 @@ private fun CoachPane(
     error: String?,
     emptyHint: String,
     stripScore: Boolean = false,
+    onRetry: (() -> Unit)? = null,
 ) {
     val raw = turns.lastOrNull { it.role == ChatTurn.Role.ASSISTANT }?.content
     val assistant = if (raw != null && stripScore) stripLeadingScore(raw) else raw
     when {
-        error != null -> Text(
-            "⚠ $error",
-            color = BrandTheme.colors.bad,
-            style = MaterialTheme.typography.bodySmall,
-        )
+        error != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "⚠ $error",
+                color = BrandTheme.colors.bad,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (onRetry != null) {
+                TextButton(onClick = onRetry) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("重试")
+                }
+            }
+        }
         loading -> Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
