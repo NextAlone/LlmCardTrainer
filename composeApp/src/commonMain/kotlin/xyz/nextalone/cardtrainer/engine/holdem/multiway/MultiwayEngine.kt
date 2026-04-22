@@ -259,8 +259,11 @@ object MultiwayEngine {
                 val newContrib = seat.contribThisStreet + paid
                 val newStack = seat.stack - paid
                 val wentUp = newContrib > currentBet
+                // NLHE: a short all-in whose increment is below the last full raise
+                // does NOT reopen action for players who already acted this street.
+                val fullRaise = wentUp && (newContrib - currentBet) >= lastRaise.coerceAtLeast(1)
                 val newCurrent = if (wentUp) newContrib else currentBet
-                val newLastRaise = if (wentUp) (newContrib - currentBet).coerceAtLeast(lastRaise) else lastRaise
+                val newLastRaise = if (fullRaise) (newContrib - currentBet) else lastRaise
                 OneApplied(
                     seat = seat.copy(
                         stack = newStack,
@@ -271,7 +274,7 @@ object MultiwayEngine {
                     ),
                     currentBet = newCurrent,
                     lastRaise = newLastRaise,
-                    raised = wentUp,
+                    raised = fullRaise,
                 )
             }
         }
