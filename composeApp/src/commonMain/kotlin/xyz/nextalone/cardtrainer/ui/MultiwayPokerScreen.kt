@@ -407,12 +407,14 @@ fun MultiwayPokerScreen(settings: AppSettings, onBack: () -> Unit) {
     fun advanceStreet() {
         val current = table
         if (!current.isStreetClosed || MultiwayEngine.isHandOver(current)) return
-        if (current.street == Street.RIVER) {
-            val atShowdown = current.copy(street = Street.SHOWDOWN)
-            table = atShowdown
-            outcome = Showdown.run(atShowdown)
-        } else {
-            table = MultiwayEngine.advanceStreet(current, deck)
+        // Delegate to the engine for every transition — including
+        // RIVER → SHOWDOWN. The engine resets per-street seat state and
+        // zeroes toActIndex so the two paths don't drift. Showdown.run
+        // then sees the canonical post-advance table.
+        val advanced = MultiwayEngine.advanceStreet(current, deck)
+        table = advanced
+        if (advanced.street == Street.SHOWDOWN) {
+            outcome = Showdown.run(advanced)
         }
     }
 
