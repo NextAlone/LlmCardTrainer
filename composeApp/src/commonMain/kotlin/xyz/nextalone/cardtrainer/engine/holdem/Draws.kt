@@ -65,18 +65,16 @@ object Draws {
             val hits = window.count { it in ranks }
             if (hits != 4) continue
             val missing = window.single { it !in ranks }
-            val isOpenEnded = (missing == low || missing == low + 4) &&
-                // open-ended only counts if the 4 hits form a true run;
-                // the inner 3 ranks must all be present.
-                (low + 1..low + 3).all { it in ranks } &&
-                // Can't be "open-ended" if one end is the deck-edge (A/ace-high
-                // counts as open via wheel; straight to A is not open since
-                // nothing beyond A).
-                missing !in listOf(0, 15)
+            // Open-ended requires both ends of the 5-window to be *extendable*
+            // beyond the rank deck edges. Windows touching A (low==1 wheel or
+            // low==10 broadway) are always single-sided, so they're gutshots
+            // regardless of which rank is missing.
+            val isOpenEnded = low in 2..9 &&
+                (missing == low || missing == low + 4) &&
+                (low + 1..low + 3).all { it in ranks }
             val (type, outs) = when {
-                // A-high (T-J-Q-K-A) and wheel (A-2-3-4-5) are one-sided → gutshot-style 4 outs
-                low == 10 && missing == 14 -> "卡顺听牌" to 4
-                low == 1 && missing == 1 -> "卡顺听牌（轮子）" to 4
+                low == 10 -> "卡顺听牌" to 4                // A-high (TJQKA)
+                low == 1 -> "卡顺听牌（轮子）" to 4          // wheel (A-2-3-4-5)
                 isOpenEnded -> "开放式顺子听牌" to 8
                 else -> "卡顺听牌" to 4
             }
