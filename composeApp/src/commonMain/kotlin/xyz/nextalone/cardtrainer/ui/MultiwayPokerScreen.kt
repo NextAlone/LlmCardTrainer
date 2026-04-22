@@ -1282,8 +1282,15 @@ private fun OutcomeBlock(outcome: ShowdownOutcome, table: MultiwayTable) {
                     seat.position.label + if (seat.isHero) "(你)" else ""
                 }.ifBlank { "无人领取" }
                 val potLabel = if (idx == 0) "主池" else "边池 $idx"
+                val oddChipLabel = if (award.oddChipSeats.isNotEmpty()) {
+                    val names = award.oddChipSeats.joinToString("、") {
+                        val seat = table.seats[it]
+                        seat.position.label + if (seat.isHero) "(你)" else ""
+                    }
+                    " · $names 各 +1"
+                } else ""
                 Text(
-                    "$potLabel ${award.potAmount} → $winnerNames (每人 ${award.perWinner})",
+                    "$potLabel ${award.potAmount} → $winnerNames (每人 ${award.perWinner})$oddChipLabel",
                     style = MaterialTheme.typography.bodySmall,
                     color = BrandTheme.colors.fg,
                 )
