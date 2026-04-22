@@ -15,7 +15,9 @@ import androidx.compose.material.icons.filled.Style
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,6 +64,13 @@ private fun keyToRoute(key: String): Route = when (key) {
 fun App(darkTheme: Boolean = isSystemInDarkTheme()) {
     val settings = remember { AppSettings(provideSettings()) }
     var route by remember { mutableStateOf<Route>(Route.Home) }
+    // Bumped each time the user lands on Home, so HomeScreen re-reads stats
+    // and resume snapshots after completing a training session instead of
+    // caching the first-load values forever.
+    var homeEpoch by remember { mutableStateOf(0) }
+    LaunchedEffect(route) {
+        if (route == Route.Home) homeEpoch++
+    }
 
     // Pop the current screen back to Home on platform back gesture / key.
     PlatformBackHandler(enabled = route != Route.Home) { route = Route.Home }
@@ -73,10 +82,12 @@ fun App(darkTheme: Boolean = isSystemInDarkTheme()) {
                 Column(Modifier.fillMaxSize().background(BrandTheme.colors.bg)) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         when (route) {
-                            Route.Home -> HomeScreen(
-                                settings = settings,
-                                onNav = { route = it },
-                            )
+                            Route.Home -> key(homeEpoch) {
+                                HomeScreen(
+                                    settings = settings,
+                                    onNav = { route = it },
+                                )
+                            }
                             Route.Poker -> if (settings.multiwayEngineEnabled) {
                                 MultiwayPokerScreen(
                                     settings = settings,
