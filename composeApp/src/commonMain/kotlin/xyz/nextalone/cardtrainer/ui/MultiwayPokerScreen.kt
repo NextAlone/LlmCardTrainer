@@ -1539,34 +1539,25 @@ private fun MultiwayActionSheet(
             }
         } else {
             val contribPlusStack = contribThisStreet + stack
-            add(
-                Preset(
-                    Action.RAISE,
-                    (table.currentBet * 2).coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack),
-                    "2x",
-                ),
-            )
-            add(
-                Preset(
-                    Action.RAISE,
-                    ((table.currentBet * 5 + 1) / 2).coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack),
-                    "2.5x",
-                ),
-            )
-            add(
-                Preset(
-                    Action.RAISE,
-                    (table.currentBet * 3).coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack),
-                    "3x",
-                ),
-            )
-            add(
-                Preset(
-                    Action.RAISE,
-                    ((pot + toCall) + toCall).coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack),
-                    "pot",
-                ),
-            )
+            // Skip any preset whose min-legal raise-to exceeds the seat's max
+            // reachable contribution; the only legal move there is ALL_IN,
+            // already offered in the defensive row.
+            fun legalRaiseTo(target: Int): Int? {
+                if (minRaiseTo > contribPlusStack) return null
+                return target.coerceAtLeast(minRaiseTo).coerceAtMost(contribPlusStack)
+            }
+            legalRaiseTo(table.currentBet * 2)?.let {
+                add(Preset(Action.RAISE, it, "2x"))
+            }
+            legalRaiseTo((table.currentBet * 5 + 1) / 2)?.let {
+                add(Preset(Action.RAISE, it, "2.5x"))
+            }
+            legalRaiseTo(table.currentBet * 3)?.let {
+                add(Preset(Action.RAISE, it, "3x"))
+            }
+            legalRaiseTo((pot + toCall) + toCall)?.let {
+                add(Preset(Action.RAISE, it, "pot"))
+            }
         }
     }
 
